@@ -128,11 +128,11 @@ buf_writer_t :: struct($N: int) {
 buf_writer_initialize :: proc(writer: ^buf_writer_t($N), object_id: u32, opcode: u16) {
 	// We write these manually because we don't want it to affect the announced
 	// size
-	buf_write(&writer.buf[0], &writer.buf_size, size_of(writer.buf), object_id)
-	buf_write(&writer.buf[0], &writer.buf_size, size_of(writer.buf), opcode)
+	buf_write(u32, &writer.buf[0], &writer.buf_size, size_of(writer.buf), object_id)
+	buf_write(u16, &writer.buf[0], &writer.buf_size, size_of(writer.buf), opcode)
 
 	writer.announced_size_offset = writer.buf_size
-	buf_write(&writer.buf[0], &writer.buf_size, size_of(writer.buf), wayland_header_size)
+	buf_write(u16, &writer.buf[0], &writer.buf_size, size_of(writer.buf), wayland_header_size)
 
 	assert(buf_writer_announced_size(writer)^ == wayland_header_size)
 }
@@ -150,10 +150,11 @@ buf_writer_send :: proc(writer: ^buf_writer_t($N), fd: linux.Fd) -> linux.Errno 
 }
 
 buf_write_unsigned_int :: proc(
+	$T: typeid,
 	buf: ^u8,
 	buf_size: ^int,
 	buf_cap: int,
-	x: $T,
+	x: T,
 ) where intrinsics.type_is_numeric(T) &&
 	intrinsics.type_is_unsigned(T) {
 	destination := mem.ptr_offset(buf, buf_size^)
@@ -166,33 +167,35 @@ buf_write_unsigned_int :: proc(
 }
 
 buf_write_unsigned_int_writer :: proc(
+	$T: typeid,
 	writer: ^buf_writer_t($N),
-	x: $T,
+	x: T,
 ) where intrinsics.type_is_numeric(T) &&
 	intrinsics.type_is_unsigned(T) {
-	buf_write_unsigned_int(&writer.buf[0], &writer.buf_size, size_of(writer.buf), x)
+	buf_write_unsigned_int(T, &writer.buf[0], &writer.buf_size, size_of(writer.buf), x)
 	buf_writer_announced_size(writer)^ += size_of(x)
 }
 
-buf_write_string :: proc(buf: ^u8, buf_size: ^int, buf_cap: int, src: string) {
+buf_write_string :: proc($T: typeid/string, buf: ^u8, buf_size: ^int, buf_cap: int, src: T) {
 	assert(buf_size^ + len(src) <= buf_cap)
 
 	// a cstring must be written here, this should probably be made more robust
 	str_len := u32(len(src))
-	buf_write(buf, buf_size, buf_cap, str_len)
+	buf_write(u32, buf, buf_size, buf_cap, str_len)
 	mem.copy(mem.ptr_offset(buf, buf_size^), raw_data(src[:]), roundup_4(int(str_len)))
 	buf_size^ += roundup_4(len(src))
 }
 
-buf_write_string_writer :: proc(writer: ^buf_writer_t($N), src: string) {
-	buf_write_string(&writer.buf[0], &writer.buf_size, size_of(writer.buf), src)
-	buf_writer_announced_size(writer)^ += size_of(u32) + roundup_4(len(src))
+buf_write_string_writer :: proc($T: typeid/string, writer: ^buf_writer_t($N), src: T) {
+	buf_write_string(T, &writer.buf[0], &writer.buf_size, size_of(writer.buf), src)
+	buf_writer_announced_size(writer)^ += u16(size_of(u32) + roundup_4(len(src)))
 }
 
 buf_write :: proc {
+	buf_write_string,
+	buf_write_string_writer,
 	buf_write_unsigned_int,
 	buf_write_unsigned_int_writer,
-	buf_write_string,
 }
 
 buf_read_unsigned_int :: proc(
@@ -233,7 +236,7 @@ wayland_wl_display_get_registry :: proc(fd: linux.Fd) -> u32 {
 	)
 
 	wayland_current_id += 1
-	buf_write(&writer, wayland_current_id)
+	buf_write(u32, &writer, wayland_current_id)
 
 	send_err := buf_writer_send(&writer, fd)
 	if (send_err != nil) {
@@ -263,12 +266,12 @@ wayland_wl_registry_bind :: proc(
 	writer: buf_writer_t(512)
 	buf_writer_initialize(&writer, registry, wayland_wl_registry_bind_opcode)
 
-	buf_write(&writer, name)
-	buf_write(&writer, interface)
-	buf_write(&writer, version)
+	buf_write(u32, &writer, name)
+	buf_write(string, &writer, interface)
+	buf_write(u32, &writer, version)
 
 	wayland_current_id += 1
-	buf_write(&writer, wayland_current_id)
+	buf_write(u32, &writer, wayland_current_id)
 
 	send_err := buf_writer_send(&writer, fd)
 	if (send_err != nil) {
@@ -294,15 +297,15 @@ wayland_wl_compositor_create_surface :: proc(fd: linux.Fd, state: ^state_t) -> u
 	msg_size: int
 	msg: [128]u8
 
-	buf_write(&msg[0], &msg_size, size_of(msg), state.wl_compositor)
-	buf_write(&msg[0], &msg_size, size_of(msg), wayland_wl_compositor_create_surface_opcode)
+	buf_write(u32, &msg[0], &msg_size, size_of(msg), state.wl_compositor)
+	buf_write(u16, &msg[0], &msg_size, size_of(msg), wayland_wl_compositor_create_surface_opcode)
 
 	msg_announced_size: u16 = wayland_header_size + size_of(wayland_current_id)
 	assert(roundup_4(msg_announced_size) == msg_announced_size)
-	buf_write(&msg[0], &msg_size, size_of(msg), msg_announced_size)
+	buf_write(u16, &msg[0], &msg_size, size_of(msg), msg_announced_size)
 
 	wayland_current_id += 1
-	buf_write(&msg[0], &msg_size, size_of(msg), wayland_current_id)
+	buf_write(u32, &msg[0], &msg_size, size_of(msg), wayland_current_id)
 
 	bytes_sent, send_err := linux.send(fd, msg[:msg_size], {})
 	if (bytes_sent != msg_size || send_err != nil) {
@@ -358,14 +361,14 @@ wayland_xdg_wm_base_pong :: proc(fd: linux.Fd, state: ^state_t, ping: u32) {
 
 	msg_size: int
 	msg: [128]u8
-	buf_write(&msg[0], &msg_size, size_of(msg), state.xdg_wm_base)
-	buf_write(&msg[0], &msg_size, size_of(msg), wayland_xdg_wm_base_pong_opcode)
+	buf_write(u32, &msg[0], &msg_size, size_of(msg), state.xdg_wm_base)
+	buf_write(u16, &msg[0], &msg_size, size_of(msg), wayland_xdg_wm_base_pong_opcode)
 
 	msg_announced_size: u16 = wayland_header_size + size_of(ping)
 	assert(roundup_4(msg_announced_size) == msg_announced_size)
 
-	buf_write(&msg[0], &msg_size, size_of(msg), msg_announced_size)
-	buf_write(&msg[0], &msg_size, size_of(msg), ping)
+	buf_write(u16, &msg[0], &msg_size, size_of(msg), msg_announced_size)
+	buf_write(u32, &msg[0], &msg_size, size_of(msg), ping)
 
 	bytes_sent, send_err := linux.send(fd, msg[:msg_size], {})
 	if (bytes_sent != msg_size || send_err != nil) {
@@ -382,14 +385,14 @@ wayland_xdg_surface_ack_configure :: proc(fd: linux.Fd, state: ^state_t, configu
 	msg_size: int
 	msg: [128]u8
 
-	buf_write(&msg[0], &msg_size, size_of(msg), state.xdg_surface)
-	buf_write(&msg[0], &msg_size, size_of(msg), wayland_xdg_surface_ack_configure_opcode)
+	buf_write(u32, &msg[0], &msg_size, size_of(msg), state.xdg_surface)
+	buf_write(u16, &msg[0], &msg_size, size_of(msg), wayland_xdg_surface_ack_configure_opcode)
 
 	msg_announced_size: u16 = wayland_header_size + size_of(configure)
 	assert(roundup_4(msg_announced_size) == msg_announced_size)
 
-	buf_write(&msg[0], &msg_size, size_of(msg), msg_announced_size)
-	buf_write(&msg[0], &msg_size, size_of(msg), configure)
+	buf_write(u16, &msg[0], &msg_size, size_of(msg), msg_announced_size)
+	buf_write(u32, &msg[0], &msg_size, size_of(msg), configure)
 
 	bytes_sent, send_err := linux.send(fd, msg[:msg_size], {})
 	if (bytes_sent != msg_size || send_err != nil) {
