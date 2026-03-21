@@ -294,21 +294,18 @@ wayland_wl_registry_bind :: proc(
 wayland_wl_compositor_create_surface :: proc(fd: linux.Fd, state: ^state_t) -> u32 {
 	assert(state.wl_compositor > 0)
 
-	msg_size: int
-	msg: [128]u8
-
-	buf_write(u32, &msg[0], &msg_size, size_of(msg), state.wl_compositor)
-	buf_write(u16, &msg[0], &msg_size, size_of(msg), wayland_wl_compositor_create_surface_opcode)
-
-	msg_announced_size: u16 = wayland_header_size + size_of(wayland_current_id)
-	assert(roundup_4(msg_announced_size) == msg_announced_size)
-	buf_write(u16, &msg[0], &msg_size, size_of(msg), msg_announced_size)
+	writer: buf_writer_t(128)
+	buf_writer_initialize(
+		&writer,
+		state.wl_compositor,
+		wayland_wl_compositor_create_surface_opcode,
+	)
 
 	wayland_current_id += 1
-	buf_write(u32, &msg[0], &msg_size, size_of(msg), wayland_current_id)
+	buf_write(u32, &writer, wayland_current_id)
 
-	bytes_sent, send_err := linux.send(fd, msg[:msg_size], {})
-	if (bytes_sent != msg_size || send_err != nil) {
+	send_err := buf_writer_send(&writer, fd)
+	if (send_err != nil) {
 		fmt.eprint(
 			"create_surface message failed to send to wl_compositor@%d",
 			state.wl_compositor,
@@ -359,19 +356,13 @@ wayland_xdg_wm_base_pong :: proc(fd: linux.Fd, state: ^state_t, ping: u32) {
 	assert(state.xdg_wm_base > 0)
 	assert(state.wl_surface > 0)
 
-	msg_size: int
-	msg: [128]u8
-	buf_write(u32, &msg[0], &msg_size, size_of(msg), state.xdg_wm_base)
-	buf_write(u16, &msg[0], &msg_size, size_of(msg), wayland_xdg_wm_base_pong_opcode)
+	writer: buf_writer_t(128)
+	buf_writer_initialize(&writer, state.xdg_wm_base, wayland_xdg_wm_base_pong_opcode)
 
-	msg_announced_size: u16 = wayland_header_size + size_of(ping)
-	assert(roundup_4(msg_announced_size) == msg_announced_size)
+	buf_write(u32, &writer, ping)
 
-	buf_write(u16, &msg[0], &msg_size, size_of(msg), msg_announced_size)
-	buf_write(u32, &msg[0], &msg_size, size_of(msg), ping)
-
-	bytes_sent, send_err := linux.send(fd, msg[:msg_size], {})
-	if (bytes_sent != msg_size || send_err != nil) {
+	send_err := buf_writer_send(&writer, fd)
+	if (send_err != nil) {
 		fmt.eprint("pong message failed to send to xdg_wm_base@%d", state.xdg_wm_base)
 		os.exit(int(send_err))
 	}
@@ -382,20 +373,13 @@ wayland_xdg_wm_base_pong :: proc(fd: linux.Fd, state: ^state_t, ping: u32) {
 wayland_xdg_surface_ack_configure :: proc(fd: linux.Fd, state: ^state_t, configure: u32) {
 	assert(state.xdg_surface > 0)
 
-	msg_size: int
-	msg: [128]u8
+	writer: buf_writer_t(128)
+	buf_writer_initialize(&writer, state.xdg_surface, wayland_xdg_surface_ack_configure_opcode)
 
-	buf_write(u32, &msg[0], &msg_size, size_of(msg), state.xdg_surface)
-	buf_write(u16, &msg[0], &msg_size, size_of(msg), wayland_xdg_surface_ack_configure_opcode)
+	buf_write(u32, &writer, configure)
 
-	msg_announced_size: u16 = wayland_header_size + size_of(configure)
-	assert(roundup_4(msg_announced_size) == msg_announced_size)
-
-	buf_write(u16, &msg[0], &msg_size, size_of(msg), msg_announced_size)
-	buf_write(u32, &msg[0], &msg_size, size_of(msg), configure)
-
-	bytes_sent, send_err := linux.send(fd, msg[:msg_size], {})
-	if (bytes_sent != msg_size || send_err != nil) {
+	send_err := buf_writer_send(&writer, fd)
+	if (send_err != nil) {
 		fmt.eprint("ack_configure message failed to send to xdg_surface@%d", state.xdg_wm_base)
 		os.exit(int(send_err))
 	}
