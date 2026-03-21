@@ -37,7 +37,7 @@ wayland_xdg_surface_get_toplevel_opcode: u16 : 1
 wayland_wl_surface_commit_opcode: u16 : 6
 wayland_wl_display_error_event: u16 : 0
 wayland_format_xrgb8888: u32 : 1
-wayland_header_size: u32 : 8
+wayland_header_size: u16 : 8
 color_channels: u32 : 4
 
 state_state_t :: enum {
@@ -119,13 +119,43 @@ wayland_display_connect :: proc() -> linux.Fd {
 	return fd
 }
 
+buf_writer_t :: struct($N: int) {
+	buf:                   [N]u8,
+	buf_size:              int,
+	announced_size_offset: int,
+}
+
+buf_writer_initialize :: proc(writer: ^buf_writer_t($N), object_id: u32, opcode: u16) {
+	// We write these manually because we don't want it to affect the announced
+	// size
+	buf_write(&writer.buf[0], &writer.buf_size, size_of(writer.buf), object_id)
+	buf_write(&writer.buf[0], &writer.buf_size, size_of(writer.buf), opcode)
+
+	writer.announced_size_offset = writer.buf_size
+	buf_write(&writer.buf[0], &writer.buf_size, size_of(writer.buf), wayland_header_size)
+
+	assert(buf_writer_announced_size(writer)^ == wayland_header_size)
+}
+
+buf_writer_announced_size :: proc(writer: ^buf_writer_t($N)) -> ^u16 {
+	return (^u16)(mem.ptr_offset(&writer.buf[0], writer.announced_size_offset))
+}
+
+buf_writer_send :: proc(writer: ^buf_writer_t($N), fd: linux.Fd) -> linux.Errno {
+	announced_size := buf_writer_announced_size(writer)^
+	assert(roundup_4(announced_size) == announced_size)
+	bytes_sent, send_err := linux.send(fd, writer.buf[:writer.buf_size], {})
+	assert(bytes_sent == writer.buf_size)
+	return send_err
+}
+
 buf_write_unsigned_int :: proc(
 	buf: ^u8,
 	buf_size: ^int,
 	buf_cap: int,
 	x: $T,
 ) where intrinsics.type_is_numeric(T) &&
-	intrinsics.type_is_numeric(T) {
+	intrinsics.type_is_unsigned(T) {
 	destination := mem.ptr_offset(buf, buf_size^)
 
 	assert(buf_size^ + size_of(x) <= buf_cap)
@@ -133,6 +163,15 @@ buf_write_unsigned_int :: proc(
 
 	(^T)(destination)^ = x
 	buf_size^ += size_of(T)
+}
+
+buf_write_unsigned_int_writer :: proc(
+	writer: ^buf_writer_t($N),
+	x: $T,
+) where intrinsics.type_is_numeric(T) &&
+	intrinsics.type_is_unsigned(T) {
+	buf_write_unsigned_int(&writer.buf[0], &writer.buf_size, size_of(writer.buf), x)
+	buf_writer_announced_size(writer)^ += size_of(x)
 }
 
 buf_write_string :: proc(buf: ^u8, buf_size: ^int, buf_cap: int, src: string) {
@@ -145,8 +184,14 @@ buf_write_string :: proc(buf: ^u8, buf_size: ^int, buf_cap: int, src: string) {
 	buf_size^ += roundup_4(len(src))
 }
 
+buf_write_string_writer :: proc(writer: ^buf_writer_t($N), src: string) {
+	buf_write_string(&writer.buf[0], &writer.buf_size, size_of(writer.buf), src)
+	buf_writer_announced_size(writer)^ += size_of(u32) + roundup_4(len(src))
+}
+
 buf_write :: proc {
 	buf_write_unsigned_int,
+	buf_write_unsigned_int_writer,
 	buf_write_string,
 }
 
@@ -180,21 +225,18 @@ buf_read :: proc {
 }
 
 wayland_wl_display_get_registry :: proc(fd: linux.Fd) -> u32 {
-	msg_size: int
-	msg: [128]u8
-
-	buf_write(&msg[0], &msg_size, size_of(msg), wayland_display_object_id)
-	buf_write(&msg[0], &msg_size, size_of(msg), wayland_wl_display_get_registry_opcode)
-
-	msg_announced_size: u16 = u16(wayland_header_size + size_of(wayland_current_id))
-	assert(roundup_4(msg_announced_size) == msg_announced_size)
-	buf_write(&msg[0], &msg_size, size_of(msg), msg_announced_size)
+	writer: buf_writer_t(128)
+	buf_writer_initialize(
+		&writer,
+		wayland_display_object_id,
+		wayland_wl_display_get_registry_opcode,
+	)
 
 	wayland_current_id += 1
-	buf_write(&msg[0], &msg_size, size_of(msg), wayland_current_id)
+	buf_write(&writer, wayland_current_id)
 
-	bytes_sent, send_err := linux.send(fd, msg[:msg_size], {})
-	if (bytes_sent != msg_size || send_err != nil) {
+	send_err := buf_writer_send(&writer, fd)
+	if (send_err != nil) {
 		fmt.eprint(
 			"get_registry message failed to send to wl_display@%d",
 			wayland_display_object_id,
@@ -218,31 +260,18 @@ wayland_wl_registry_bind :: proc(
 	interface: string,
 	version: u32,
 ) -> u32 {
-	msg_size: int
-	msg: [512]u8
+	writer: buf_writer_t(512)
+	buf_writer_initialize(&writer, registry, wayland_wl_registry_bind_opcode)
 
-	buf_write(&msg[0], &msg_size, size_of(msg), registry)
-	buf_write(&msg[0], &msg_size, size_of(msg), wayland_wl_registry_bind_opcode)
-
-	msg_announced_size: u16 = u16(
-		int(wayland_header_size) +
-		size_of(name) +
-		size_of(len(interface)) +
-		roundup_4(len(interface)) +
-		size_of(wayland_current_id),
-	)
-	assert(roundup_4(msg_announced_size) == msg_announced_size)
-	buf_write(&msg[0], &msg_size, size_of(msg), msg_announced_size)
-
-	buf_write(&msg[0], &msg_size, size_of(msg), name)
-	buf_write(&msg[0], &msg_size, size_of(msg), interface)
-	buf_write(&msg[0], &msg_size, size_of(msg), version)
+	buf_write(&writer, name)
+	buf_write(&writer, interface)
+	buf_write(&writer, version)
 
 	wayland_current_id += 1
-	buf_write(&msg[0], &msg_size, size_of(msg), wayland_current_id)
+	buf_write(&writer, wayland_current_id)
 
-	bytes_sent, send_err := linux.send(fd, msg[:msg_size], {})
-	if (bytes_sent != msg_size || send_err != nil) {
+	send_err := buf_writer_send(&writer, fd)
+	if (send_err != nil) {
 		fmt.eprintfln("bind message failed to send to wl_registry@%d", registry)
 		os.exit(int(send_err))
 	}
@@ -268,7 +297,7 @@ wayland_wl_compositor_create_surface :: proc(fd: linux.Fd, state: ^state_t) -> u
 	buf_write(&msg[0], &msg_size, size_of(msg), state.wl_compositor)
 	buf_write(&msg[0], &msg_size, size_of(msg), wayland_wl_compositor_create_surface_opcode)
 
-	msg_announced_size: u16 = u16(wayland_header_size + size_of(wayland_current_id))
+	msg_announced_size: u16 = wayland_header_size + size_of(wayland_current_id)
 	assert(roundup_4(msg_announced_size) == msg_announced_size)
 	buf_write(&msg[0], &msg_size, size_of(msg), msg_announced_size)
 
@@ -332,7 +361,7 @@ wayland_xdg_wm_base_pong :: proc(fd: linux.Fd, state: ^state_t, ping: u32) {
 	buf_write(&msg[0], &msg_size, size_of(msg), state.xdg_wm_base)
 	buf_write(&msg[0], &msg_size, size_of(msg), wayland_xdg_wm_base_pong_opcode)
 
-	msg_announced_size: u16 = u16(wayland_header_size) + size_of(ping)
+	msg_announced_size: u16 = wayland_header_size + size_of(ping)
 	assert(roundup_4(msg_announced_size) == msg_announced_size)
 
 	buf_write(&msg[0], &msg_size, size_of(msg), msg_announced_size)
@@ -356,7 +385,7 @@ wayland_xdg_surface_ack_configure :: proc(fd: linux.Fd, state: ^state_t, configu
 	buf_write(&msg[0], &msg_size, size_of(msg), state.xdg_surface)
 	buf_write(&msg[0], &msg_size, size_of(msg), wayland_xdg_surface_ack_configure_opcode)
 
-	msg_announced_size: u16 = u16(wayland_header_size) + size_of(configure)
+	msg_announced_size: u16 = wayland_header_size + size_of(configure)
 	assert(roundup_4(msg_announced_size) == msg_announced_size)
 
 	buf_write(&msg[0], &msg_size, size_of(msg), msg_announced_size)
@@ -445,7 +474,7 @@ wayland_handle_message :: proc(fd: linux.Fd, state: ^state_t, msg: ^^u8, msg_len
 		message := string(error[:error_len - 1]) // -1 to strip null terminator
 
 		fmt.eprintfln(
-			"fatal error: target_object_id=%d code=%u error=%s",
+			"fatal error: target_object_id=%d code=%d error=%s",
 			target_obejct_id,
 			code,
 			message,
