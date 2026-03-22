@@ -5,6 +5,7 @@ import "core:fmt"
 import "core:mem"
 import "core:os"
 import "core:sys/linux"
+import "core:sys/posix"
 
 roundup_4 :: proc(n: $T) -> T where intrinsics.type_is_numeric(T) {
 	return T(int((n) + 3) & -4)
@@ -380,11 +381,191 @@ wayland_xdg_surface_ack_configure :: proc(fd: linux.Fd, state: ^state_t, configu
 
 	send_err := buf_writer_send(&writer, fd)
 	if (send_err != nil) {
-		fmt.eprint("ack_configure message failed to send to xdg_surface@%d", state.xdg_wm_base)
+		fmt.eprint("ack_configure message failed to send to xdg_surface@%d", state.xdg_surface)
 		os.exit(int(send_err))
 	}
 
 	fmt.printfln("-> xdg_surface@%d.ack_configure: configure=%d", state.xdg_surface, configure)
+}
+
+wayland_wl_shm_create_pool :: proc(fd: linux.Fd, state: ^state_t) -> u32 {
+	assert(state.shm_pool_size > 0)
+
+	writer: buf_writer_t(128)
+	buf_writer_initialize(&writer, state.wl_shm, wayland_wl_shm_create_pool_opcode)
+
+	wayland_current_id += 1
+	buf_write(u32, &writer, wayland_current_id)
+	buf_write(u32, &writer, state.shm_pool_size)
+	msg := &writer.buf[0]
+	msg_size := writer.buf_size
+
+
+	// #define CMSG_ALIGN(len) (((len) + sizeof (size_t) - 1) \
+	// 			 & (size_t) ~(sizeof (size_t) - 1))
+	// #define CMSG_SPACE(len) (CMSG_ALIGN (len) \
+	// 			 + CMSG_ALIGN (sizeof (struct cmsghdr)))
+	// #define CMSG_LEN(len)   (CMSG_ALIGN (sizeof (struct cmsghdr)) + (len))
+	CMSG_ALIGN :: proc(len: $T) -> T {
+		return (len + size_of(u64) - 1) & (~(int(size_of(u64) - 1)))
+	}
+	CMSG_SPACE :: proc(len: $T) -> T {
+		return CMSG_ALIGN(len) + CMSG_ALIGN(size_of(posix.cmsghdr))
+	}
+	CMSG_LEN :: proc(len: $T) -> T {
+		return len + CMSG_ALIGN(size_of(posix.cmsghdr))
+	}
+
+	buf: [128]u8
+
+	io := posix.iovec {
+		iov_base = msg,
+		iov_len  = uint(msg_size),
+	}
+
+	socket_msg := posix.msghdr {
+		msg_iov        = &io,
+		msg_iovlen     = 1,
+		msg_control    = &buf[0],
+		msg_controllen = size_of(buf),
+	}
+
+	cmsg := posix.CMSG_FIRSTHDR(&socket_msg)
+	cmsg.cmsg_level = posix.SOL_SOCKET
+	cmsg.cmsg_type = posix.SCM_RIGHTS
+	cmsg.cmsg_len = uint(CMSG_LEN(size_of(state.shm_fd)))
+
+	(^int)(posix.CMSG_DATA(cmsg))^ = int(state.shm_fd)
+	socket_msg.msg_controllen = uint(CMSG_SPACE(size_of(state.shm_fd)))
+
+	bytes_sent := posix.sendmsg((posix.FD)(fd), &socket_msg, {})
+	if bytes_sent != msg_size {
+		fmt.eprintfln("create_pool message failed to send to wl_shm@%d", state.wl_shm)
+		os.exit(int(posix.errno()))
+	}
+
+	fmt.printfln("-> wl_shm@%d.create_pool: wl_shm_pool=%d", state.wl_shm, wayland_current_id)
+
+	return wayland_current_id
+}
+
+wayland_wl_shm_pool_create_buffer :: proc(fd: linux.Fd, state: ^state_t) -> u32 {
+	assert(state.wl_shm_pool > 0)
+
+	writer: buf_writer_t(128)
+	buf_writer_initialize(&writer, state.wl_shm_pool, wayland_wl_shm_pool_create_buffer_opcode)
+
+	wayland_current_id += 1
+	buf_write(u32, &writer, wayland_current_id)
+
+	offset: u32 = 0
+	buf_write(u32, &writer, offset)
+	buf_write(u32, &writer, state.w)
+	buf_write(u32, &writer, state.h)
+	buf_write(u32, &writer, state.stride)
+	buf_write(u32, &writer, wayland_format_xrgb8888)
+
+	send_err := buf_writer_send(&writer, fd)
+	if (send_err != nil) {
+		fmt.eprint("create_buffer message failed to send to wl_shm_pool@%d", state.wl_shm_pool)
+		os.exit(int(send_err))
+	}
+
+	fmt.printfln(
+		"-> wl_shm_pool@%d.create_buffer: wl_buffer=%d",
+		state.wl_shm_pool,
+		wayland_current_id,
+	)
+
+	return wayland_current_id
+}
+
+wayland_xdg_wm_base_get_xdg_surface :: proc(fd: linux.Fd, state: ^state_t) -> u32 {
+	assert(state.xdg_wm_base > 0)
+	assert(state.wl_surface > 0)
+
+	writer: buf_writer_t(128)
+	buf_writer_initialize(&writer, state.xdg_wm_base, wayland_xdg_wm_base_get_xdg_surface_opcode)
+
+	wayland_current_id += 1
+	buf_write(u32, &writer, wayland_current_id)
+	buf_write(u32, &writer, state.wl_surface)
+
+	send_err := buf_writer_send(&writer, fd)
+	if (send_err != nil) {
+		fmt.eprint("get_xdg_surface message failed to send to xdg_wm_base@%d", wayland_current_id)
+		os.exit(int(send_err))
+	}
+
+	fmt.printfln(
+		"-> xdg_wm_base@%d.get_xdg_surface: xdg_surface=%d wl_surface=%d",
+		state.xdg_wm_base,
+		wayland_current_id,
+		state.wl_surface,
+	)
+
+	return wayland_current_id
+}
+
+wayland_wl_surface_attach :: proc(fd: linux.Fd, state: ^state_t) {
+	assert(state.wl_surface > 0)
+	assert(state.wl_buffer > 0)
+
+	writer: buf_writer_t(128)
+	buf_writer_initialize(&writer, state.wl_surface, wayland_wl_surface_attach_opcode)
+
+	buf_write(u32, &writer, state.wl_buffer)
+
+	x, y: u32
+	buf_write(u32, &writer, x)
+	buf_write(u32, &writer, y)
+
+	send_err := buf_writer_send(&writer, fd)
+	if (send_err != nil) {
+		fmt.eprint("attach message failed to send to wl_buffer@%d", state.wl_buffer)
+		os.exit(int(send_err))
+	}
+
+	fmt.printfln("-> wl_surface@%d.attach: wl_buffer=%d", state.wl_surface, state.wl_buffer)
+}
+
+wayland_xdg_surface_get_toplevel :: proc(fd: linux.Fd, state: ^state_t) -> u32 {
+	assert(state.wl_surface > 0)
+
+	writer: buf_writer_t(128)
+	buf_writer_initialize(&writer, state.xdg_surface, wayland_xdg_surface_get_toplevel_opcode)
+
+	wayland_current_id += 1
+	buf_write(u32, &writer, wayland_current_id)
+
+	send_err := buf_writer_send(&writer, fd)
+	if (send_err != nil) {
+		fmt.eprint("get_toplevel message failed to send to xdg_surface@%d", state.xdg_surface)
+		os.exit(int(send_err))
+	}
+
+	fmt.printfln(
+		"-> xdg_surface@%d.get_toplevel: xdg_toplevel=%d",
+		state.xdg_surface,
+		wayland_current_id,
+	)
+
+	return wayland_current_id
+}
+
+wayland_wl_surface_commit :: proc(fd: linux.Fd, state: ^state_t) {
+	assert(state.wl_surface > 0)
+
+	writer: buf_writer_t(128)
+	buf_writer_initialize(&writer, state.wl_surface, wayland_wl_surface_commit_opcode)
+
+	send_err := buf_writer_send(&writer, fd)
+	if (send_err != nil) {
+		fmt.eprint("commit message failed to send to wl_surface@%d", state.wl_surface)
+		os.exit(int(send_err))
+	}
+
+	fmt.printfln("-> wl_surface@%d.commit: ", state.wl_surface)
 }
 
 wayland_handle_message :: proc(fd: linux.Fd, state: ^state_t, msg: ^^u8, msg_len: ^int) {
@@ -475,13 +656,29 @@ wayland_handle_message :: proc(fd: linux.Fd, state: ^state_t, msg: ^^u8, msg_len
 	} else if (object_id == state.xdg_wm_base && opcode == wayland_xdg_wm_base_event_ping) {
 		ping := buf_read(msg, msg_len, u32)
 
-		fmt.printfln("<- xdg_wm_base@%u.ping: ping=%u", state.xdg_wm_base, ping)
+		fmt.printfln("<- xdg_wm_base@%d.ping: ping=%d", state.xdg_wm_base, ping)
 		wayland_xdg_wm_base_pong(fd, state, ping)
+
+		return
+	} else if (object_id == state.xdg_toplevel && opcode == wayland_xdg_toplevel_event_configure) {
+		w, h, len: u32 =
+			buf_read(msg, msg_len, u32), buf_read(msg, msg_len, u32), buf_read(msg, msg_len, u32)
+		buf: [256]u8
+		assert(len < size_of(buf))
+		buf_read(msg, msg_len, &buf[0], int(len))
+
+		fmt.printfln(
+			"<- xdg_toplevel@%d.configure: w=%d h=%d states[%d]",
+			state.xdg_toplevel,
+			w,
+			h,
+			len,
+		)
 
 		return
 	} else if (object_id == state.xdg_surface && opcode == wayland_xdg_surface_event_configure) {
 		configure := buf_read(msg, msg_len, u32)
-		fmt.printf("<- xdg_surface@%u.configure: configure=%u\n", state.xdg_surface, configure)
+		fmt.printf("<- xdg_surface@%d.configure: configure=%d\n", state.xdg_surface, configure)
 		wayland_xdg_surface_ack_configure(fd, state, configure)
 		state.state = .STATE_SURFACE_ACKED_CONFIGURE
 
@@ -539,9 +736,39 @@ main :: proc() {
 			assert(state.state == .STATE_NONE)
 
 			state.wl_surface = wayland_wl_compositor_create_surface(fd, &state)
-			// state.xdg_surface = wayland_xdg_wm_base_get_xdg_surface(fd, &state)
-			// state.xdg_toplevel = wayland_xdg_surface_get_toplevel(fd, &state)
-			// wayland_wl_surface_commit(fd, &state)
+			state.xdg_surface = wayland_xdg_wm_base_get_xdg_surface(fd, &state)
+			state.xdg_toplevel = wayland_xdg_surface_get_toplevel(fd, &state)
+			wayland_wl_surface_commit(fd, &state)
+		}
+
+		if (state.state == .STATE_SURFACE_ACKED_CONFIGURE) {
+			assert(state.wl_surface != 0)
+			assert(state.xdg_surface != 0)
+			assert(state.xdg_toplevel != 0)
+
+			if (state.wl_shm_pool == 0) {
+				state.wl_shm_pool = wayland_wl_shm_create_pool(fd, &state)
+			}
+			if (state.wl_buffer == 0) {
+				state.wl_buffer = wayland_wl_shm_pool_create_buffer(fd, &state)
+			}
+
+			assert(state.shm_pool_data != nil)
+			assert(state.shm_pool_size != 0)
+
+			pixels := ([^]u32)(state.shm_pool_data)
+			for i: u32 = 0; i < state.w * state.h; i += 1 {
+				r: u8 = 255
+				g: u8 = 0
+				b: u8 = 0
+
+				pixels[i] = (u32(r) << 16) | (u32(g) << 8) | u32(b)
+			}
+
+			wayland_wl_surface_attach(fd, &state)
+			wayland_wl_surface_commit(fd, &state)
+
+			state.state = .STATE_SURFACE_ATTACHED
 		}
 	}
 }
