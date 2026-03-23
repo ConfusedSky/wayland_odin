@@ -715,6 +715,11 @@ wayland_handle_message :: proc(fd: linux.Fd, state: ^state_t, msg: ^^u8, msg_len
 		)
 
 		return
+	} else if (object_id == state.xdg_toplevel && opcode == wayland_xdg_toplevel_event_close) {
+		running = false
+
+		fmt.printfln("<- xdg_toplevel@%d.close:", state.xdg_toplevel)
+		return
 	} else if (object_id == state.xdg_surface && opcode == wayland_xdg_surface_event_configure) {
 		configure := buf_read(msg, msg_len, u32)
 		fmt.printf("<- xdg_surface@%d.configure: configure=%d\n", state.xdg_surface, configure)
