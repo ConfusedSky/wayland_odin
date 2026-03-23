@@ -120,6 +120,15 @@ wayland_display_connect :: proc() -> linux.Fd {
 	return fd
 }
 
+wayland_display_connection_cleanup :: proc(fd: linux.Fd) {
+	close_err := linux.close(fd)
+
+	if (close_err != nil) {
+		fmt.eprintln("close failed")
+		os.exit(int(close_err))
+	}
+}
+
 buf_writer_t :: struct($N: int) {
 	buf:                   [N]u8,
 	buf_size:              int,
@@ -324,7 +333,7 @@ wayland_wl_compositor_create_surface :: proc(fd: linux.Fd, state: ^state_t) -> u
 
 }
 
-create_shared_memory_file :: proc(size: u64, state: ^state_t) {
+create_shared_memory_file :: proc(state: ^state_t) {
 	fd, memfd_err := linux.memfd_create("shm_file", {})
 
 	if fd == -1 || memfd_err != nil {
@@ -332,7 +341,7 @@ create_shared_memory_file :: proc(size: u64, state: ^state_t) {
 		os.exit(int(memfd_err))
 	}
 
-	ftruncate_err := linux.ftruncate(fd, i64(size))
+	ftruncate_err := linux.ftruncate(fd, i64(state.shm_pool_size))
 	if ftruncate_err != nil {
 		fmt.eprintln("ftruncate failed")
 		os.exit(int(ftruncate_err))
@@ -340,7 +349,13 @@ create_shared_memory_file :: proc(size: u64, state: ^state_t) {
 
 	// this needs to be mmunmaped and closed if the screen is resized and this
 	// function is used to create a new memory file
-	data, mmap_err := linux.mmap(uintptr(0), uint(size), {.READ, .WRITE}, {.SHARED}, fd)
+	data, mmap_err := linux.mmap(
+		uintptr(0),
+		uint(state.shm_pool_size),
+		{.READ, .WRITE},
+		{.SHARED},
+		fd,
+	)
 
 	if mmap_err != nil {
 		fmt.eprintln("mmap failed")
@@ -351,6 +366,30 @@ create_shared_memory_file :: proc(size: u64, state: ^state_t) {
 	assert(state.shm_pool_data != (^u8)(~uintptr(0)))
 	assert(state.shm_pool_data != nil)
 	state.shm_fd = fd
+}
+
+cleanup_shared_memory_file :: proc(state: ^state_t) {
+	assert(state.shm_pool_data != nil)
+	assert(state.shm_pool_size > 0)
+	assert(state.shm_fd > 0)
+
+	munmap_err := linux.munmap(rawptr(state.shm_pool_data), uint(state.shm_pool_size))
+	state.shm_pool_data = nil
+	state.shm_pool_size = 0
+
+	if munmap_err != nil {
+		fmt.eprintln("munmap failed")
+		os.exit(int(munmap_err))
+	}
+
+	close_err := linux.close(state.shm_fd)
+
+	if close_err != nil {
+		fmt.eprintln("close failed")
+		os.exit(int(close_err))
+	}
+
+	state.shm_fd = 0
 }
 
 wayland_xdg_wm_base_pong :: proc(fd: linux.Fd, state: ^state_t, ping: u32) {
@@ -721,7 +760,7 @@ main :: proc() {
 	}
 
 	state.shm_pool_size = state.h * state.stride
-	create_shared_memory_file(u64(state.shm_pool_size), &state)
+	create_shared_memory_file(&state)
 
 	for running {
 		read_buf: [4096]u8
@@ -788,4 +827,6 @@ main :: proc() {
 	}
 
 	fmt.println("Got termination signal. Terminating...")
+	cleanup_shared_memory_file(&state)
+	wayland_display_connection_cleanup(fd)
 }
