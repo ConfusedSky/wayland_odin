@@ -698,7 +698,19 @@ wayland_handle_message :: proc(fd: linux.Fd, state: ^state_t, msg: ^^u8, msg_len
 	msg_len^ -= int(remaining)
 }
 
+running := true
+
+handle_signal :: proc "c" (sig: posix.Signal) {
+	#partial switch sig {
+	case .SIGTERM, .SIGINT:
+		running = false
+	}
+}
+
 main :: proc() {
+	posix.signal(.SIGTERM, handle_signal)
+	posix.signal(.SIGINT, handle_signal)
+
 	fd := wayland_display_connect()
 
 	state: state_t = {
@@ -711,7 +723,7 @@ main :: proc() {
 	state.shm_pool_size = state.h * state.stride
 	create_shared_memory_file(u64(state.shm_pool_size), &state)
 
-	for {
+	for running {
 		read_buf: [4096]u8
 		read_bytes, recv_error := linux.recv(fd, read_buf[:], {})
 
@@ -774,4 +786,6 @@ main :: proc() {
 			state.state = .STATE_SURFACE_ATTACHED
 		}
 	}
+
+	fmt.println("Got termination signal. Terminating...")
 }
