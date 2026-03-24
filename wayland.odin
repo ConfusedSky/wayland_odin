@@ -814,12 +814,17 @@ main :: proc() {
 
 			pixels := ([^]u32)(state.shm_pool_data)
 			for i: u32 = 0; i < state.w * state.h; i += 1 {
+				border_size :: 4
 				x := u8(i % state.w)
 				y := u8(i / state.w)
 
-				r: u8 = (((x / 10) + (y / 10)) % 2) * 255
-				g: u8 = (((x / 10) + (y / 10)) % 2) * 255
-				b: u8 = (((x / 10) + (y / 10)) % 2) * 255
+				r, g, b: u8
+				// if (x > border_size && u32(x) < state.w - border_size) &&
+				//    (y > border_size && u32(y) < state.h - border_size) {
+				r = (((x / 10) + (y / 10)) % 2) * 255
+				g = (((x / 10) + (y / 10)) % 2) * 255
+				b = (((x / 10) + (y / 10)) % 2) * 255
+				//}
 
 				pixels[i] = (u32(r) << 16) | (u32(g) << 8) | u32(b)
 			}
