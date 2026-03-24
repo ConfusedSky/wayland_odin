@@ -3,6 +3,7 @@ package wayland_gen
 import "core:fmt"
 import "core:os"
 import "core:path/filepath"
+import "core:strconv"
 import "core:strings"
 
 FILE_HEADER :: "// This file was auto-generated\n// DO NOT EDIT\n"
@@ -64,7 +65,7 @@ generate_interface :: proc(output_dir: string, iface: ^Interface) -> bool {
 	if len(iface.enums) > 0 {
 		strings.write_byte(&sb, '\n')
 		for &en in iface.enums {
-			emit_enum(&sb, &en)
+			emit_enum(&sb, &en, iface.name)
 		}
 	}
 
@@ -120,12 +121,12 @@ emit_event :: proc(sb: ^strings.Builder, ev: ^Event) {
 	strings.write_byte(sb, '\n')
 }
 
-emit_enum :: proc(sb: ^strings.Builder, en: ^Enum) {
+emit_enum :: proc(sb: ^strings.Builder, en: ^Enum, iface_name: string) {
 	camel := to_camel_case(en.name)
 	defer delete(camel)
 
 	if en.bitfield {
-		emit_bitfield_enum(sb, en, camel)
+		emit_bitfield_enum(sb, en, camel, iface_name)
 	} else {
 		emit_plain_enum(sb, en, camel)
 	}
@@ -146,35 +147,59 @@ emit_plain_enum :: proc(sb: ^strings.Builder, en: ^Enum, camel: string) {
 	strings.write_string(sb, "}\n")
 }
 
-emit_bitfield_enum :: proc(sb: ^strings.Builder, en: ^Enum, camel: string) {
+emit_bitfield_enum :: proc(sb: ^strings.Builder, en: ^Enum, camel: string, iface_name: string) {
 	flag_name := strings.concatenate({camel, "Flag"})
 	defer delete(flag_name)
 
-	// Use existing zero entry name if present, otherwise synthesise "None"
-	zero_label := "None"
-	zero_label_alloc := false
-	for &entry in en.entries {
-		if entry.value == "0" {
-			zero_label = to_camel_case(entry.name)
-			zero_label_alloc = true
-			break
-		}
-	}
-	defer if zero_label_alloc do delete(zero_label)
-
 	fmt.sbprintf(sb, "%s :: enum u32 {{\n", flag_name)
-	fmt.sbprintf(sb, "\t%s = 0,\n", zero_label)
 
 	for &entry in en.entries {
-		if entry.value == "0" do continue
+		val, ok := strconv.parse_u64(entry.value)
+		if !ok {
+			fmt.eprintf(
+				"warn: %s.%s.%s (value=%q): could not parse value, skipping\n",
+				iface_name,
+				en.name,
+				entry.name,
+				entry.value,
+			)
+			continue
+		}
+		if val == 0 {
+			fmt.eprintf(
+				"warn: %s.%s.%s (value=0): zero entry has no bit index, skipping\n",
+				iface_name,
+				en.name,
+				entry.name,
+			)
+			continue
+		}
+		if val & (val - 1) != 0 {
+			fmt.eprintf(
+				"warn: %s.%s.%s (value=%s): composite value is not a power of 2, skipping\n",
+				iface_name,
+				en.name,
+				entry.name,
+				entry.value,
+			)
+			continue
+		}
+
+		bit_index: u64 = 0
+		v := val
+		for v > 1 {
+			v >>= 1
+			bit_index += 1
+		}
+
 		entry_camel := to_camel_case(entry.name)
 		defer delete(entry_camel)
 		if entry.summary != "" {
 			fmt.sbprintf(sb, "\t// %s\n", entry.summary)
 		}
-		fmt.sbprintf(sb, "\t%s = %s,\n", entry_camel, entry.value)
+		fmt.sbprintf(sb, "\t%s = %d,\n", entry_camel, bit_index)
 	}
-	strings.write_string(sb, "}\n")
 
+	strings.write_string(sb, "}\n")
 	fmt.sbprintf(sb, "%s :: bit_set[%s; u32]\n", camel, flag_name)
 }
