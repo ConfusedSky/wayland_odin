@@ -87,6 +87,86 @@ format_arg_comments :: proc(args: [dynamic]Arg) -> string {
 	return strings.to_string(sb)
 }
 
+// Maps a Wayland arg to its Odin type string.
+// For enum args, returns the camel-cased enum name, qualified with the package
+// prefix for cross-interface refs (e.g. "wl_shm.format" -> "wl_shm.Format").
+// Caller owns returned string.
+arg_type_to_odin_type :: proc(arg: Arg) -> string {
+	if arg.enum_ref != "" {
+		dot := strings.last_index(arg.enum_ref, ".")
+		if dot == -1 {
+			return to_camel_case(arg.enum_ref)
+		}
+		pkg  := arg.enum_ref[:dot]
+		name := to_camel_case(arg.enum_ref[dot + 1:])
+		defer delete(name)
+		return strings.concatenate({pkg, ".", name})
+	}
+	switch arg.type {
+	case "int":    return strings.clone("i32")
+	case "uint":   return strings.clone("u32")
+	case "fixed":  return strings.clone("f64")
+	case "object": return strings.clone("u32")
+	case "new_id": return strings.clone("u32")
+	case "string": return strings.clone("string")
+	case "array":  return strings.clone("[]u8")
+	case "fd":     return strings.clone("linux.Fd")
+	case:          return strings.clone("u32")
+	}
+}
+
+// Formats the doc comment for a request procedure:
+//   // summary
+//   //
+//   // Parameters:
+//   //	name: type [iface] = summary
+//   //
+//   // description body
+// Summary line omitted if not present. Parameters section omitted if no args.
+// Body section omitted if not present.
+// Caller owns returned string.
+format_request_doc_comment :: proc(desc: Maybe(Description), args: [dynamic]Arg) -> string {
+	sb: strings.Builder
+	strings.builder_init(&sb)
+
+	d, has_desc := desc.(Description)
+	has_summary := has_desc && d.summary != ""
+	has_body    := has_desc && d.body != ""
+
+	if has_summary {
+		strings.write_string(&sb, "// ")
+		strings.write_string(&sb, d.summary)
+		strings.write_byte(&sb, '\n')
+	}
+
+	if len(args) > 0 {
+		if has_summary {
+			strings.write_string(&sb, "//\n")
+		}
+		strings.write_string(&sb, "// Parameters:\n")
+		for arg in args {
+			line := format_arg_comment(arg)
+			defer delete(line)
+			strings.write_string(&sb, "//\t")
+			strings.write_string(&sb, line)
+			strings.write_byte(&sb, '\n')
+		}
+	}
+
+	if has_body {
+		strings.write_string(&sb, "//\n")
+		lines := strings.split_lines(d.body)
+		defer delete(lines)
+		for line in lines {
+			strings.write_string(&sb, "// ")
+			strings.write_string(&sb, line)
+			strings.write_byte(&sb, '\n')
+		}
+	}
+
+	return strings.to_string(sb)
+}
+
 // Wrap a Description into // comment lines:
 //   summary line, blank //, then body lines (body section omitted if empty).
 // If desc is nil, returns "// (description not found)".

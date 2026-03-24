@@ -214,6 +214,9 @@ parse_arg :: proc(
 	iface_attr, has_iface := attr(elem, "interface")
 	if has_iface do arg.interface = strings.clone(iface_attr)
 
+	enum_attr, has_enum := attr(elem, "enum")
+	if has_enum do arg.enum_ref = strings.clone(enum_attr)
+
 	summary, has_summary := attr(elem, "summary")
 	if has_summary do arg.summary = strings.clone(summary)
 

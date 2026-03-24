@@ -4,6 +4,7 @@ Arg :: struct {
 	name:      string,
 	type:      string,
 	interface: string,
+	enum_ref:  string,
 	summary:   string,
 }
 
@@ -53,20 +54,3 @@ Protocol :: struct {
 	interfaces: [dynamic]Interface,
 }
 
-protocol_destroy :: proc(p: ^Protocol) {
-	for &iface in p.interfaces {
-		for &req in iface.requests {
-			delete(req.args)
-		}
-		delete(iface.requests)
-		for &ev in iface.events {
-			delete(ev.args)
-		}
-		delete(iface.events)
-		for &en in iface.enums {
-			delete(en.entries)
-		}
-		delete(iface.enums)
-	}
-	delete(p.interfaces)
-}

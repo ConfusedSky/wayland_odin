@@ -1,6 +1,7 @@
 package wayland_gen
 
 import "core:fmt"
+import "core:mem"
 import "core:os"
 
 main :: proc() {
@@ -19,11 +20,20 @@ main :: proc() {
 	}
 	defer delete(data)
 
-	protocol, parse_ok := parse_protocol(data)
+	// All protocol IR allocations go into an arena; freeing the arena releases everything.
+	arena: mem.Dynamic_Arena
+	mem.dynamic_arena_init(&arena)
+	defer mem.dynamic_arena_destroy(&arena)
+
+	protocol: Protocol
+	parse_ok: bool
+	{
+		context.allocator = mem.dynamic_arena_allocator(&arena)
+		protocol, parse_ok = parse_protocol(data)
+	}
 	if !parse_ok {
 		os.exit(1)
 	}
-	defer protocol_destroy(&protocol)
 
 	if !validate_protocol(&protocol) {
 		os.exit(1)

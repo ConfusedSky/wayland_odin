@@ -23,6 +23,32 @@ generate :: proc(output_dir: string, p: ^Protocol) -> bool {
 	return true
 }
 
+// Scans all request args to determine what imports the file needs.
+// cross_pkgs entries are slices into existing enum_ref strings (not owned).
+// Caller owns the returned dynamic array itself.
+collect_imports :: proc(iface: ^Interface) -> (needs_linux: bool, cross_pkgs: [dynamic]string) {
+	seen: map[string]bool
+	defer delete(seen)
+
+	needs_linux = len(iface.requests) > 0
+
+	for &req in iface.requests {
+		for &arg in req.args {
+			if arg.enum_ref != "" {
+				dot := strings.last_index(arg.enum_ref, ".")
+				if dot != -1 {
+					pkg := arg.enum_ref[:dot]
+					if !seen[pkg] {
+						seen[pkg] = true
+						append(&cross_pkgs, pkg)
+					}
+				}
+			}
+		}
+	}
+	return
+}
+
 generate_interface :: proc(output_dir: string, iface: ^Interface) -> bool {
 	iface_dir, _ := filepath.join({output_dir, iface.name}, context.allocator)
 	defer delete(iface_dir)
@@ -45,11 +71,31 @@ generate_interface :: proc(output_dir: string, iface: ^Interface) -> bool {
 	// Package declaration
 	fmt.sbprintf(&sb, "package %s\n", iface.name)
 
-	// Requests
+	// Imports
+	needs_linux, cross_pkgs := collect_imports(iface)
+	defer delete(cross_pkgs)
+	if needs_linux || len(cross_pkgs) > 0 {
+		strings.write_byte(&sb, '\n')
+		if needs_linux {
+			strings.write_string(&sb, "import \"core:sys/linux\"\n")
+		}
+		for pkg in cross_pkgs {
+			fmt.sbprintf(&sb, "import %s \"../%s\"\n", pkg, pkg)
+		}
+	}
+
+	// Request constants
 	if len(iface.requests) > 0 {
 		strings.write_byte(&sb, '\n')
 		for &req in iface.requests {
 			emit_request(&sb, &req)
+		}
+	}
+
+	// Request procedures
+	if len(iface.requests) > 0 {
+		for &req in iface.requests {
+			emit_request_proc(&sb, &req, iface.name)
 		}
 	}
 
@@ -87,19 +133,35 @@ emit_request :: proc(sb: ^strings.Builder, req: ^Request) {
 	upper := to_upper_snake(req.name)
 	defer delete(upper)
 
-	desc_comment := format_description_comment(req.description)
-	defer delete(desc_comment)
-	fmt.sbprintf(sb, "%s\n", desc_comment)
 	fmt.sbprintf(sb, "%s_REQUEST_OPCODE :: %d\n", upper, req.opcode)
-
-	if len(req.args) > 0 {
-		arg_comments := format_arg_comments(req.args)
-		defer delete(arg_comments)
-		fmt.sbprintf(sb, "%s\n", arg_comments)
-	}
 	fmt.sbprintf(sb, "%s_REQUEST_ARG_COUNT :: %d\n", upper, len(req.args))
 
 	strings.write_byte(sb, '\n')
+}
+
+emit_request_proc :: proc(sb: ^strings.Builder, req: ^Request, iface_name: string) {
+	doc := format_request_doc_comment(req.description, req.args)
+	defer delete(doc)
+	strings.write_string(sb, doc)
+
+	fmt.sbprintf(sb, "%s :: proc(socket: linux.Fd, %s: u32", req.name, iface_name)
+
+	for &arg in req.args {
+		param_name: string
+		if arg.type == "new_id" {
+			param_name = arg.name == "id" ? strings.clone("new_id") : strings.concatenate({arg.name, "_new_id"})
+		} else {
+			param_name = strings.clone(arg.name)
+		}
+		defer delete(param_name)
+
+		type_str := arg_type_to_odin_type(arg)
+		defer delete(type_str)
+
+		fmt.sbprintf(sb, ", %s: %s", param_name, type_str)
+	}
+
+	strings.write_string(sb, ") {\n\tunimplemented()\n}\n\n")
 }
 
 emit_event :: proc(sb: ^strings.Builder, ev: ^Event) {
