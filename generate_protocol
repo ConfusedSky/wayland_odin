@@ -1,0 +1,6 @@
+#!/bin/env bash
+set -euo pipefail
+
+odin build ./wayland_gen
+./wayland_gen.bin /usr/share/wayland/wayland.xml ./wayland_protocol/
+./wayland_gen.bin /usr/share/wayland-protocols/stable/xdg-shell/xdg-shell.xml ./wayland_protocol/
