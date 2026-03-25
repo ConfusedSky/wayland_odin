@@ -1,13 +1,13 @@
 package Main
 
+import buf_writer "./buf_writer"
+import utils "./utils"
 import "base:intrinsics"
 import "core:fmt"
 import "core:mem"
 import "core:os"
 import "core:sys/linux"
 import "core:sys/posix"
-import buf_writer "./buf_writer"
-import utils "./utils"
 
 
 wayland_current_id: u32 = 1
@@ -351,51 +351,11 @@ wayland_wl_shm_create_pool :: proc(fd: linux.Fd, state: ^state_t) -> u32 {
 	wayland_current_id += 1
 	buf_writer.write_u32(&writer, wayland_current_id)
 	buf_writer.write_u32(&writer, state.shm_pool_size)
-	msg := &writer.buf[0]
-	msg_size := writer.buf_size
 
-
-	// #define CMSG_ALIGN(len) (((len) + sizeof (size_t) - 1) \
-	// 			 & (size_t) ~(sizeof (size_t) - 1))
-	// #define CMSG_SPACE(len) (CMSG_ALIGN (len) \
-	// 			 + CMSG_ALIGN (sizeof (struct cmsghdr)))
-	// #define CMSG_LEN(len)   (CMSG_ALIGN (sizeof (struct cmsghdr)) + (len))
-	CMSG_ALIGN :: proc(len: $T) -> T {
-		return (len + size_of(u64) - 1) & (~(int(size_of(u64) - 1)))
-	}
-	CMSG_SPACE :: proc(len: $T) -> T {
-		return CMSG_ALIGN(len) + CMSG_ALIGN(size_of(posix.cmsghdr))
-	}
-	CMSG_LEN :: proc(len: $T) -> T {
-		return len + CMSG_ALIGN(size_of(posix.cmsghdr))
-	}
-
-	buf: [128]u8
-
-	io := posix.iovec {
-		iov_base = msg,
-		iov_len  = uint(msg_size),
-	}
-
-	socket_msg := posix.msghdr {
-		msg_iov        = &io,
-		msg_iovlen     = 1,
-		msg_control    = &buf[0],
-		msg_controllen = size_of(buf),
-	}
-
-	cmsg := posix.CMSG_FIRSTHDR(&socket_msg)
-	cmsg.cmsg_level = posix.SOL_SOCKET
-	cmsg.cmsg_type = posix.SCM_RIGHTS
-	cmsg.cmsg_len = uint(CMSG_LEN(size_of(state.shm_fd)))
-
-	(^int)(posix.CMSG_DATA(cmsg))^ = int(state.shm_fd)
-	socket_msg.msg_controllen = uint(CMSG_SPACE(size_of(state.shm_fd)))
-
-	bytes_sent := posix.sendmsg((posix.FD)(fd), &socket_msg, {})
-	if bytes_sent != msg_size {
+	send_err := buf_writer.send_with_fd(&writer, fd, state.shm_fd)
+	if send_err != posix.Errno.NONE {
 		fmt.eprintfln("create_pool message failed to send to wl_shm@%d", state.wl_shm)
-		os.exit(int(posix.errno()))
+		os.exit(int(send_err))
 	}
 
 	fmt.printfln("-> wl_shm@%d.create_pool: wl_shm_pool=%d", state.wl_shm, wayland_current_id)

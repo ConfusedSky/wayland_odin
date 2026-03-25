@@ -3,6 +3,7 @@ package buf_writer
 import utils "../utils"
 import "core:mem"
 import "core:sys/linux"
+import "core:sys/posix"
 
 header_size: u16 : 8
 
@@ -28,12 +29,59 @@ get_announced_size :: proc(writer: ^Writer($N)) -> ^u16 {
 	return (^u16)(mem.ptr_offset(&writer.buf[0], writer.announced_size_offset))
 }
 
-send :: proc(writer: ^Writer($N), fd: linux.Fd) -> linux.Errno {
+send :: proc(writer: ^Writer($N), socket: linux.Fd) -> linux.Errno {
 	announced_size := get_announced_size(writer)^
 	assert(utils.roundup_4(announced_size) == announced_size)
-	bytes_sent, send_err := linux.send(fd, writer.buf[:writer.buf_size], {})
-	assert(bytes_sent == writer.buf_size)
-	return send_err
+	bytes_sent, send_err := linux.send(socket, writer.buf[:writer.buf_size], {})
+	if bytes_sent != writer.buf_size {
+		return send_err
+	}
+	return nil
+}
+
+// This should probably use linux instead of posix to be consistent but I
+// couldn't get it to work
+send_with_fd :: proc(writer: ^Writer($N), socket: linux.Fd, fd: linux.Fd) -> posix.Errno {
+	msg := &writer.buf[0]
+	msg_size := writer.buf_size
+
+	CMSG_ALIGN :: proc(len: $T) -> T {
+		return (len + size_of(u64) - 1) & (~(int(size_of(u64) - 1)))
+	}
+	CMSG_SPACE :: proc(len: $T) -> T {
+		return CMSG_ALIGN(len) + CMSG_ALIGN(size_of(posix.cmsghdr))
+	}
+	CMSG_LEN :: proc(len: $T) -> T {
+		return len + CMSG_ALIGN(size_of(posix.cmsghdr))
+	}
+
+	buf: [128]u8
+
+	io := posix.iovec {
+		iov_base = msg,
+		iov_len  = uint(msg_size),
+	}
+
+	socket_msg := posix.msghdr {
+		msg_iov        = &io,
+		msg_iovlen     = 1,
+		msg_control    = &buf[0],
+		msg_controllen = size_of(buf),
+	}
+
+	cmsg := posix.CMSG_FIRSTHDR(&socket_msg)
+	cmsg.cmsg_level = posix.SOL_SOCKET
+	cmsg.cmsg_type = posix.SCM_RIGHTS
+	cmsg.cmsg_len = uint(CMSG_LEN(size_of(fd)))
+
+	(^int)(posix.CMSG_DATA(cmsg))^ = int(fd)
+	socket_msg.msg_controllen = uint(CMSG_SPACE(size_of(fd)))
+
+	bytes_sent := posix.sendmsg((posix.FD)(socket), &socket_msg, {})
+	if bytes_sent != msg_size {
+		return posix.errno()
+	}
+	return .NONE
 }
 
 @(private)
