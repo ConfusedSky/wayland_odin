@@ -96,7 +96,7 @@ write_u16_raw :: proc(buf: ^u8, buf_size: ^int, buf_cap: int, x: u16) {
 }
 
 @(private)
-write_string_raw :: proc(buf: ^u8, buf_size: ^int, buf_cap: int, src: string) {
+write_data_raw :: proc(buf: ^u8, buf_size: ^int, buf_cap: int, src: []u8) {
 	assert(buf_size^ + len(src) <= buf_cap)
 
 	// a cstring must be written here, this should probably be made more robust
@@ -117,6 +117,11 @@ write_u16 :: proc(writer: ^Writer($N), x: u16) {
 }
 
 write_string :: proc(writer: ^Writer($N), src: string) {
-	write_string_raw(&writer.buf[0], &writer.buf_size, size_of(writer.buf), src)
+	write_data_raw(&writer.buf[0], &writer.buf_size, size_of(writer.buf), transmute([]u8)src)
+	get_announced_size(writer)^ += u16(size_of(u32) + utils.roundup_4(len(src)))
+}
+
+write_array :: proc(writer: ^Writer($N), src: []u8) {
+	write_data_raw(&writer.buf[0], &writer.buf_size, size_of(writer.buf), src)
 	get_announced_size(writer)^ += u16(size_of(u32) + utils.roundup_4(len(src)))
 }
