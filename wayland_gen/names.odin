@@ -87,18 +87,25 @@ format_arg_comments :: proc(args: [dynamic]Arg) -> string {
 	return strings.to_string(sb)
 }
 
+// Splits "pkg.name" into package and enum name components.
+// Returns ok=false for same-interface refs that have no dot.
+split_enum_ref :: proc(enum_ref: string) -> (pkg: string, name: string, ok: bool) {
+	dot := strings.last_index(enum_ref, ".")
+	if dot == -1 do return "", enum_ref, false
+	return enum_ref[:dot], enum_ref[dot + 1:], true
+}
+
 // Maps a Wayland arg to its Odin type string.
 // For enum args, returns the camel-cased enum name, qualified with the package
 // prefix for cross-interface refs (e.g. "wl_shm.format" -> "wl_shm.Format").
 // Caller owns returned string.
 arg_type_to_odin_type :: proc(arg: Arg) -> string {
 	if arg.enum_ref != "" {
-		dot := strings.last_index(arg.enum_ref, ".")
-		if dot == -1 {
+		pkg, ref_name, cross := split_enum_ref(arg.enum_ref)
+		if !cross {
 			return to_camel_case(arg.enum_ref)
 		}
-		pkg  := arg.enum_ref[:dot]
-		name := to_camel_case(arg.enum_ref[dot + 1:])
+		name := to_camel_case(ref_name)
 		defer delete(name)
 		return strings.concatenate({pkg, ".", name})
 	}
@@ -146,10 +153,10 @@ format_request_doc_comment :: proc(desc: Maybe(Description), args: [dynamic]Arg)
 		strings.write_string(&sb, "// Parameters:\n")
 		for arg in args {
 			line := format_arg_comment(arg)
-			defer delete(line)
 			strings.write_string(&sb, "//\t")
 			strings.write_string(&sb, line)
 			strings.write_byte(&sb, '\n')
+			delete(line)
 		}
 	}
 

@@ -35,13 +35,10 @@ collect_imports :: proc(iface: ^Interface) -> (needs_linux: bool, cross_pkgs: [d
 	for &req in iface.requests {
 		for &arg in req.args {
 			if arg.enum_ref != "" {
-				dot := strings.last_index(arg.enum_ref, ".")
-				if dot != -1 {
-					pkg := arg.enum_ref[:dot]
-					if !seen[pkg] {
-						seen[pkg] = true
-						append(&cross_pkgs, pkg)
-					}
+				pkg, _, cross := split_enum_ref(arg.enum_ref)
+				if cross && !seen[pkg] {
+					seen[pkg] = true
+					append(&cross_pkgs, pkg)
 				}
 			}
 		}
@@ -148,17 +145,20 @@ emit_request_proc :: proc(sb: ^strings.Builder, req: ^Request, iface_name: strin
 
 	for &arg in req.args {
 		param_name: string
-		if arg.type == "new_id" {
-			param_name = arg.name == "id" ? strings.clone("new_id") : strings.concatenate({arg.name, "_new_id"})
+		param_owned := false
+		if arg.type == "new_id" && arg.name != "id" {
+			param_name = strings.concatenate({arg.name, "_new_id"})
+			param_owned = true
+		} else if arg.type == "new_id" {
+			param_name = "new_id"
 		} else {
-			param_name = strings.clone(arg.name)
+			param_name = arg.name
 		}
-		defer delete(param_name)
 
 		type_str := arg_type_to_odin_type(arg)
-		defer delete(type_str)
-
 		fmt.sbprintf(sb, ", %s: %s", param_name, type_str)
+		delete(type_str)
+		if param_owned do delete(param_name)
 	}
 
 	strings.write_string(sb, ") {\n\tunimplemented()\n}\n\n")
