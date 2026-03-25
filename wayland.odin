@@ -353,7 +353,7 @@ wayland_wl_shm_create_pool :: proc(fd: linux.Fd, state: ^state_t) -> u32 {
 	buf_writer.write_u32(&writer, state.shm_pool_size)
 
 	send_err := buf_writer.send_with_fd(&writer, fd, state.shm_fd)
-	if send_err != posix.Errno.NONE {
+	if send_err != nil {
 		fmt.eprintfln("create_pool message failed to send to wl_shm@%d", state.wl_shm)
 		os.exit(int(send_err))
 	}

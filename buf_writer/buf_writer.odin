@@ -3,7 +3,6 @@ package buf_writer
 import utils "../utils"
 import "core:mem"
 import "core:sys/linux"
-import "core:sys/posix"
 
 header_size: u16 : 8
 
@@ -39,49 +38,43 @@ send :: proc(writer: ^Writer($N), socket: linux.Fd) -> linux.Errno {
 	return nil
 }
 
-// This should probably use linux instead of posix to be consistent but I
-// couldn't get it to work
-send_with_fd :: proc(writer: ^Writer($N), socket: linux.Fd, fd: linux.Fd) -> posix.Errno {
-	msg := &writer.buf[0]
-	msg_size := writer.buf_size
 
+send_with_fd :: proc(writer: ^Writer($N), socket: linux.Fd, fd: linux.Fd) -> linux.Errno {
+	Cmsghdr :: struct {
+		cmsg_len:   uint,
+		cmsg_level: i32,
+		cmsg_type:  i32,
+	}
+
+	SCM_RIGHTS: i32 : 1
 	CMSG_ALIGN :: proc(len: $T) -> T {
 		return (len + size_of(u64) - 1) & (~(int(size_of(u64) - 1)))
 	}
 	CMSG_SPACE :: proc(len: $T) -> T {
-		return CMSG_ALIGN(len) + CMSG_ALIGN(size_of(posix.cmsghdr))
+		return CMSG_ALIGN(len) + CMSG_ALIGN(size_of(Cmsghdr))
 	}
 	CMSG_LEN :: proc(len: $T) -> T {
-		return len + CMSG_ALIGN(size_of(posix.cmsghdr))
+		return len + CMSG_ALIGN(size_of(Cmsghdr))
 	}
 
-	buf: [128]u8
-
-	io := posix.iovec {
-		iov_base = msg,
-		iov_len  = uint(msg_size),
-	}
-
-	socket_msg := posix.msghdr {
-		msg_iov        = &io,
-		msg_iovlen     = 1,
-		msg_control    = &buf[0],
-		msg_controllen = size_of(buf),
-	}
-
-	cmsg := posix.CMSG_FIRSTHDR(&socket_msg)
-	cmsg.cmsg_level = posix.SOL_SOCKET
-	cmsg.cmsg_type = posix.SCM_RIGHTS
+	control_buf: [128]u8
+	cmsg := (^Cmsghdr)(&control_buf[0])
+	cmsg.cmsg_level = i32(linux.SOL_SOCKET)
+	cmsg.cmsg_type = SCM_RIGHTS
 	cmsg.cmsg_len = uint(CMSG_LEN(size_of(fd)))
+	(^i32)(mem.ptr_offset(&control_buf[0], CMSG_ALIGN(size_of(Cmsghdr))))^ = i32(fd)
 
-	(^int)(posix.CMSG_DATA(cmsg))^ = int(fd)
-	socket_msg.msg_controllen = uint(CMSG_SPACE(size_of(fd)))
-
-	bytes_sent := posix.sendmsg((posix.FD)(socket), &socket_msg, {})
-	if bytes_sent != msg_size {
-		return posix.errno()
+	iov := [1]linux.IO_Vec{{base = ([^]byte)(&writer.buf[0]), len = uint(writer.buf_size)}}
+	socket_msg := linux.Msg_Hdr {
+		iov     = iov[:],
+		control = control_buf[:CMSG_SPACE(size_of(fd))],
 	}
-	return .NONE
+
+	bytes_sent, send_err := linux.sendmsg(socket, &socket_msg, {})
+	if bytes_sent != writer.buf_size {
+		return send_err
+	}
+	return nil
 }
 
 @(private)
