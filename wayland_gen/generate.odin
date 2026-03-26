@@ -76,6 +76,7 @@ generate_interface :: proc(output_dir: string, iface: ^Interface) -> bool {
 	if has_requests || len(cross_pkgs) > 0 {
 		strings.write_byte(&sb, '\n')
 		if has_requests {
+			strings.write_string(&sb, "import \"core:fmt\"\n")
 			strings.write_string(&sb, "import \"core:sys/linux\"\n")
 			strings.write_string(&sb, "import buf_writer \"../../buf_writer\"\n")
 			strings.write_string(&sb, "import constants \"../../constants\"\n")
@@ -147,7 +148,22 @@ emit_request_proc :: proc(sb: ^strings.Builder, req: ^Request, iface_name: strin
 
 	fmt.sbprintf(sb, "%s :: proc(socket: linux.Fd, %s: u32", req.name, iface_name)
 
+	write_calls_sb: strings.Builder
+	strings.builder_init(&write_calls_sb)
+	defer strings.builder_destroy(&write_calls_sb)
+
+	print_fmt_sb: strings.Builder
+	strings.builder_init(&print_fmt_sb)
+	defer strings.builder_destroy(&print_fmt_sb)
+
+	print_args_sb: strings.Builder
+	strings.builder_init(&print_args_sb)
+	defer strings.builder_destroy(&print_args_sb)
+
+	fd_param: string
+	first_print_arg := true
 	needs_string_size := false
+
 	for &arg in req.args {
 		param_name: string
 		param_owned := false
@@ -163,11 +179,39 @@ emit_request_proc :: proc(sb: ^strings.Builder, req: ^Request, iface_name: strin
 		type_str := arg_type_to_odin_type(arg)
 		fmt.sbprintf(sb, ", %s: %s", param_name, type_str)
 		delete(type_str)
-		if param_owned do delete(param_name)
+
+		if arg.type == "fd" {
+			fd_param = param_name // not owned — arg.name persists for lifetime of req
+		} else {
+			switch {
+			case arg.enum_ref != "":
+				fmt.sbprintf(&write_calls_sb, "\tbuf_writer.write_u32(&writer, transmute(u32)%s)\n", param_name)
+			case arg.type == "uint", arg.type == "object", arg.type == "new_id":
+				fmt.sbprintf(&write_calls_sb, "\tbuf_writer.write_u32(&writer, %s)\n", param_name)
+			case arg.type == "int":
+				fmt.sbprintf(&write_calls_sb, "\tbuf_writer.write_u32(&writer, transmute(u32)%s)\n", param_name)
+			case arg.type == "fixed":
+				fmt.sbprintf(&write_calls_sb, "\tbuf_writer.write_u32(&writer, u32(%s * 256))\n", param_name)
+			case arg.type == "string":
+				fmt.sbprintf(&write_calls_sb, "\tbuf_writer.write_string(&writer, %s)\n", param_name)
+			case arg.type == "array":
+				fmt.sbprintf(&write_calls_sb, "\tbuf_writer.write_array(&writer, %s)\n", param_name)
+			}
+
+			if first_print_arg {
+				fmt.sbprintf(&print_fmt_sb, "%s=%%v", arg.name)
+				first_print_arg = false
+			} else {
+				fmt.sbprintf(&print_fmt_sb, " %s=%%v", arg.name)
+			}
+			fmt.sbprintf(&print_args_sb, ", %s", param_name)
+		}
 
 		if arg.type == "string" || arg.type == "array" {
 			needs_string_size = true
 		}
+
+		if param_owned do delete(param_name)
 	}
 
 	upper := to_upper_snake(req.name)
@@ -176,9 +220,26 @@ emit_request_proc :: proc(sb: ^strings.Builder, req: ^Request, iface_name: strin
 	size_const :=
 		needs_string_size ? "constants.BUF_WRITER_SIZE_STRING" : "constants.BUF_WRITER_SIZE_BASE"
 
-	strings.write_string(sb, ") {\n")
+	strings.write_string(sb, ") -> linux.Errno {\n")
 	fmt.sbprintf(sb, "\twriter: buf_writer.Writer(%s)\n", size_const)
 	fmt.sbprintf(sb, "\tbuf_writer.initialize(&writer, %s, %s_REQUEST_OPCODE)\n", iface_name, upper)
+	strings.write_string(sb, strings.to_string(write_calls_sb))
+	if fd_param != "" {
+		fmt.sbprintf(sb, "\tsend_err := buf_writer.send_with_fd(&writer, socket, %s)\n", fd_param)
+	} else {
+		strings.write_string(sb, "\tsend_err := buf_writer.send(&writer, socket)\n")
+	}
+	strings.write_string(sb, "\tif send_err != nil do return send_err\n")
+	fmt.sbprintf(
+		sb,
+		"\tfmt.printfln(\"-> %s@%%v.%s: %s\", %s%s)\n",
+		iface_name,
+		req.name,
+		strings.to_string(print_fmt_sb),
+		iface_name,
+		strings.to_string(print_args_sb),
+	)
+	strings.write_string(sb, "\treturn nil\n")
 	strings.write_string(sb, "}\n\n")
 }
 
