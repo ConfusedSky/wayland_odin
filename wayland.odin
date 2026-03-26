@@ -147,11 +147,6 @@ buf_read_n :: proc(buf: ^^u8, buf_size: ^int, dst: ^u8, n: int) {
 	buf_size^ -= n
 }
 
-buf_read :: proc {
-	buf_read_unsigned_int,
-	buf_read_n,
-}
-
 wayland_wl_display_get_registry :: proc(fd: linux.Fd) -> u32 {
 	writer: buf_writer.Writer(128)
 	buf_writer.initialize(
@@ -485,30 +480,30 @@ wayland_wl_surface_commit :: proc(fd: linux.Fd, state: ^state_t) {
 wayland_handle_message :: proc(fd: linux.Fd, state: ^state_t, msg: ^^u8, msg_len: ^int) {
 	assert(msg_len^ >= 8)
 
-	object_id := buf_read(msg, msg_len, u32)
+	object_id := buf_read_unsigned_int(msg, msg_len, u32)
 	assert(object_id <= wayland_current_id)
 
-	opcode := buf_read(msg, msg_len, u16)
+	opcode := buf_read_unsigned_int(msg, msg_len, u16)
 
-	announced_size := buf_read(msg, msg_len, u16)
+	announced_size := buf_read_unsigned_int(msg, msg_len, u16)
 	assert(utils.roundup_4(announced_size) <= announced_size)
 
 	header_size: u16 = size_of(object_id) + size_of(opcode) + size_of(announced_size)
 	assert(int(announced_size) <= int(header_size) + msg_len^)
 
 	if (object_id == state.wl_registry && opcode == wayland_wl_registry_event_global) {
-		name := buf_read(msg, msg_len, u32)
-		interface_len := buf_read(msg, msg_len, u32)
+		name := buf_read_unsigned_int(msg, msg_len, u32)
+		interface_len := buf_read_unsigned_int(msg, msg_len, u32)
 		padded_interface_len := utils.roundup_4(int(interface_len))
 
 		interface_buf: [512]u8
 		assert(padded_interface_len <= utils.cstring_len(interface_buf))
 
-		buf_read(msg, msg_len, &interface_buf[0], padded_interface_len)
+		buf_read_n(msg, msg_len, &interface_buf[0], padded_interface_len)
 		assert(interface_buf[interface_len - 1] == 0)
 
 		interface := string(interface_buf[:interface_len]) // -1 to strip null terminator
-		version := buf_read(msg, msg_len, u32)
+		version := buf_read_unsigned_int(msg, msg_len, u32)
 
 		fmt.printfln(
 			"<- wl_registry@%d.global: name=%d interface=%s version=%d",
@@ -548,11 +543,11 @@ wayland_handle_message :: proc(fd: linux.Fd, state: ^state_t, msg: ^^u8, msg_len
 		return
 	} else if (object_id == wayland_display_object_id &&
 		   opcode == wayland_wl_display_error_event) {
-		target_obejct_id := buf_read(msg, msg_len, u32)
-		code := buf_read(msg, msg_len, u32)
+		target_obejct_id := buf_read_unsigned_int(msg, msg_len, u32)
+		code := buf_read_unsigned_int(msg, msg_len, u32)
 		error: [512]u8
-		error_len := buf_read(msg, msg_len, u32)
-		buf_read(msg, msg_len, &error[0], utils.roundup_4(int(error_len)))
+		error_len := buf_read_unsigned_int(msg, msg_len, u32)
+		buf_read_n(msg, msg_len, &error[0], utils.roundup_4(int(error_len)))
 		message := string(error[:error_len - 1]) // -1 to strip null terminator
 
 		fmt.eprintfln(
@@ -563,12 +558,12 @@ wayland_handle_message :: proc(fd: linux.Fd, state: ^state_t, msg: ^^u8, msg_len
 		)
 		os.exit(int(linux.Errno.EINVAL))
 	} else if object_id == state.wl_shm && opcode == wayland_shm_pool_event_format {
-		format := buf_read(msg, msg_len, u32)
+		format := buf_read_unsigned_int(msg, msg_len, u32)
 		fmt.printfln("<- wl_shm: format=%#x", format)
 
 		return
 	} else if (object_id == state.xdg_wm_base && opcode == wayland_xdg_wm_base_event_ping) {
-		ping := buf_read(msg, msg_len, u32)
+		ping := buf_read_unsigned_int(msg, msg_len, u32)
 
 		fmt.printfln("<- xdg_wm_base@%d.ping: ping=%d", state.xdg_wm_base, ping)
 		wayland_xdg_wm_base_pong(fd, state, ping)
@@ -576,10 +571,12 @@ wayland_handle_message :: proc(fd: linux.Fd, state: ^state_t, msg: ^^u8, msg_len
 		return
 	} else if (object_id == state.xdg_toplevel && opcode == wayland_xdg_toplevel_event_configure) {
 		w, h, len: u32 =
-			buf_read(msg, msg_len, u32), buf_read(msg, msg_len, u32), buf_read(msg, msg_len, u32)
+			buf_read_unsigned_int(msg, msg_len, u32),
+			buf_read_unsigned_int(msg, msg_len, u32),
+			buf_read_unsigned_int(msg, msg_len, u32)
 		buf: [256]u8
 		assert(len < size_of(buf))
-		buf_read(msg, msg_len, &buf[0], int(len))
+		buf_read_n(msg, msg_len, &buf[0], int(len))
 
 		fmt.printfln(
 			"<- xdg_toplevel@%d.configure: w=%d h=%d states[%d]",
@@ -596,7 +593,7 @@ wayland_handle_message :: proc(fd: linux.Fd, state: ^state_t, msg: ^^u8, msg_len
 		fmt.printfln("<- xdg_toplevel@%d.close:", state.xdg_toplevel)
 		return
 	} else if (object_id == state.xdg_surface && opcode == wayland_xdg_surface_event_configure) {
-		configure := buf_read(msg, msg_len, u32)
+		configure := buf_read_unsigned_int(msg, msg_len, u32)
 		fmt.printf("<- xdg_surface@%d.configure: configure=%d\n", state.xdg_surface, configure)
 		wayland_xdg_surface_ack_configure(fd, state, configure)
 		state.state = .STATE_SURFACE_ACKED_CONFIGURE
