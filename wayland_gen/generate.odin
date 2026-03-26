@@ -189,9 +189,9 @@ emit_request_proc :: proc(sb: ^strings.Builder, req: ^Request, iface_name: strin
 			case arg.type == "uint", arg.type == "object", arg.type == "new_id":
 				fmt.sbprintf(&write_calls_sb, "\tbuf_writer.write_u32(&writer, %s)\n", param_name)
 			case arg.type == "int":
-				fmt.sbprintf(&write_calls_sb, "\tbuf_writer.write_u32(&writer, transmute(u32)%s)\n", param_name)
+				fmt.sbprintf(&write_calls_sb, "\tbuf_writer.write_i32(&writer, %s)\n", param_name)
 			case arg.type == "fixed":
-				fmt.sbprintf(&write_calls_sb, "\tbuf_writer.write_u32(&writer, u32(%s * 256))\n", param_name)
+				fmt.sbprintf(&write_calls_sb, "\tbuf_writer.write_i32(&writer, i32(%s * 256))\n", param_name)
 			case arg.type == "string":
 				fmt.sbprintf(&write_calls_sb, "\tbuf_writer.write_string(&writer, %s)\n", param_name)
 			case arg.type == "array":
