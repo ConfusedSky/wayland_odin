@@ -1,0 +1,4 @@
+package constants
+
+BUF_WRITER_SIZE_BASE :: 128
+BUF_WRITER_SIZE_STRING :: 512

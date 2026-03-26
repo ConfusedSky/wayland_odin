@@ -23,14 +23,16 @@ generate :: proc(output_dir: string, p: ^Protocol) -> bool {
 	return true
 }
 
-// Scans all request args to determine what imports the file needs.
+// Scans the interface to determine what imports the generated file needs.
+// has_requests is true when the interface has any requests, which controls
+// linux/buf_writer/constants imports and request proc generation.
 // cross_pkgs entries are slices into existing enum_ref strings (not owned).
 // Caller owns the returned dynamic array itself.
-collect_imports :: proc(iface: ^Interface) -> (needs_linux: bool, cross_pkgs: [dynamic]string) {
+collect_imports :: proc(iface: ^Interface) -> (has_requests: bool, cross_pkgs: [dynamic]string) {
 	seen: map[string]bool
 	defer delete(seen)
 
-	needs_linux = len(iface.requests) > 0
+	has_requests = len(iface.requests) > 0
 
 	for &req in iface.requests {
 		for &arg in req.args {
@@ -69,12 +71,14 @@ generate_interface :: proc(output_dir: string, iface: ^Interface) -> bool {
 	fmt.sbprintf(&sb, "package %s\n", iface.name)
 
 	// Imports
-	needs_linux, cross_pkgs := collect_imports(iface)
+	has_requests, cross_pkgs := collect_imports(iface)
 	defer delete(cross_pkgs)
-	if needs_linux || len(cross_pkgs) > 0 {
+	if has_requests || len(cross_pkgs) > 0 {
 		strings.write_byte(&sb, '\n')
-		if needs_linux {
+		if has_requests {
 			strings.write_string(&sb, "import \"core:sys/linux\"\n")
+			strings.write_string(&sb, "import buf_writer \"../../buf_writer\"\n")
+			strings.write_string(&sb, "import constants \"../../constants\"\n")
 		}
 		for pkg in cross_pkgs {
 			fmt.sbprintf(&sb, "import %s \"../%s\"\n", pkg, pkg)
@@ -143,6 +147,7 @@ emit_request_proc :: proc(sb: ^strings.Builder, req: ^Request, iface_name: strin
 
 	fmt.sbprintf(sb, "%s :: proc(socket: linux.Fd, %s: u32", req.name, iface_name)
 
+	needs_string_size := false
 	for &arg in req.args {
 		param_name: string
 		param_owned := false
@@ -159,9 +164,22 @@ emit_request_proc :: proc(sb: ^strings.Builder, req: ^Request, iface_name: strin
 		fmt.sbprintf(sb, ", %s: %s", param_name, type_str)
 		delete(type_str)
 		if param_owned do delete(param_name)
+
+		if arg.type == "string" || arg.type == "array" {
+			needs_string_size = true
+		}
 	}
 
-	strings.write_string(sb, ") {\n\tunimplemented()\n}\n\n")
+	upper := to_upper_snake(req.name)
+	defer delete(upper)
+
+	size_const :=
+		needs_string_size ? "constants.BUF_WRITER_SIZE_STRING" : "constants.BUF_WRITER_SIZE_BASE"
+
+	strings.write_string(sb, ") {\n")
+	fmt.sbprintf(sb, "\twriter: buf_writer.Writer(%s)\n", size_const)
+	fmt.sbprintf(sb, "\tbuf_writer.initialize(&writer, %s, %s_REQUEST_OPCODE)\n", iface_name, upper)
+	strings.write_string(sb, "}\n\n")
 }
 
 emit_event :: proc(sb: ^strings.Builder, ev: ^Event) {
