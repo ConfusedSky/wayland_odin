@@ -9,6 +9,7 @@ import "core:os"
 import "core:strings"
 import "core:sys/linux"
 import "core:sys/posix"
+import "core:time"
 import wl_buffer "wayland_protocol/wl_buffer"
 import wl_compositor "wayland_protocol/wl_compositor"
 import wl_display "wayland_protocol/wl_display"
@@ -19,6 +20,8 @@ import wl_surface "wayland_protocol/wl_surface"
 import xdg_surface "wayland_protocol/xdg_surface"
 import xdg_toplevel "wayland_protocol/xdg_toplevel"
 import xdg_wm_base "wayland_protocol/xdg_wm_base"
+
+running := true
 
 wayland_display_object_id: u32 : 1
 color_channels: u32 : 4
@@ -42,7 +45,9 @@ state_t :: struct {
 	xdg_toplevel:       u32,
 	stride:             u32,
 	w:                  u32,
+	max_w:              u32,
 	h:                  u32,
+	max_h:              u32,
 	shm_pool_size:      u32,
 	shm_fd:             linux.Fd,
 	shm_pool_data:      ^u8,
@@ -284,6 +289,11 @@ registry_bind :: proc(
 }
 
 create_shared_memory_file :: proc(state: ^state_t) {
+	assert(state.w > 0)
+	assert(state.h > 0)
+	assert(state.stride == state.w * color_channels)
+	assert(state.shm_pool_size > 0)
+
 	fd, memfd_err := linux.memfd_create("shm_file", {})
 
 	if fd == -1 || memfd_err != nil {
@@ -342,7 +352,29 @@ cleanup_shared_memory_file :: proc(state: ^state_t) {
 	state.shm_fd = 0
 }
 
-wayland_handle_message :: proc(fd: linux.Fd, state: ^state_t, msg: ^^u8, msg_len: ^int) {
+wayland_handle_messages :: proc(state: ^state_t) {
+	read_buf: [4096]u8
+	read_bytes, recv_error := linux.recv(state.socket_fd, read_buf[:], {.DONTWAIT})
+
+	if recv_error == linux.Errno.EAGAIN {
+		time.sleep(time.Millisecond * 10)
+		return
+	} else if read_bytes == -1 || recv_error != nil {
+		fmt.eprintln("Failed to receive new events")
+		os.exit(int(recv_error))
+	}
+
+	fmt.printfln("Received %d bytes", read_bytes)
+
+	msg := &read_buf[0]
+	msg_len := int(read_bytes)
+
+	for msg_len > 0 {
+		wayland_handle_message(state, &msg, &msg_len)
+	}
+}
+
+wayland_handle_message :: proc(state: ^state_t, msg: ^^u8, msg_len: ^int) {
 	assert(msg_len^ >= 8)
 
 	object_id := buf_read_unsigned_int(msg, msg_len, u32)
@@ -386,13 +418,123 @@ wayland_handle_message :: proc(fd: linux.Fd, state: ^state_t, msg: ^^u8, msg_len
 	}
 }
 
-running := true
+can_complete_initialization :: proc(state: ^state_t) -> bool {
+	return(
+		state.w > 0 &&
+		state.h > 0 &&
+		state.max_w > 0 &&
+		state.max_h > 0 &&
+		state.wl_compositor != 0 &&
+		state.wl_shm != 0 &&
+		state.xdg_wm_base != 0 &&
+		state.wl_surface == 0 \
+	)
+}
+
+complete_initialization :: proc(state: ^state_t) {
+	assert(state.state == .STATE_NONE)
+	create_shared_memory_file(state)
+
+	state.wayland_current_id += 1
+	err := wl_compositor.create_surface(
+		state.socket_fd,
+		state.wl_compositor,
+		state.wayland_current_id,
+	)
+	if err != nil do os.exit(int(err))
+	state.wl_surface = state.wayland_current_id
+
+	state.wayland_current_id += 1
+	err = xdg_wm_base.get_xdg_surface(
+		state.socket_fd,
+		state.xdg_wm_base,
+		state.wayland_current_id,
+		state.wl_surface,
+	)
+	if err != nil do os.exit(int(err))
+	state.xdg_surface = state.wayland_current_id
+
+	state.wayland_current_id += 1
+	err = xdg_surface.get_toplevel(state.socket_fd, state.xdg_surface, state.wayland_current_id)
+	if err != nil do os.exit(int(err))
+	state.xdg_toplevel = state.wayland_current_id
+
+	err = wl_surface.commit(state.socket_fd, state.wl_surface)
+	if err != nil do os.exit(int(err))
+
+	state.wayland_current_id += 1
+	err = wl_shm.create_pool(
+		state.socket_fd,
+		state.wl_shm,
+		state.wayland_current_id,
+		state.shm_fd,
+		i32(state.shm_pool_size),
+	)
+	if err != nil do os.exit(int(err))
+	state.wl_shm_pool = state.wayland_current_id
+	state.wayland_current_id += 1
+	err = wl_shm_pool.create_buffer(
+		state.socket_fd,
+		state.wl_shm_pool,
+		state.wayland_current_id,
+		0,
+		i32(state.w),
+		i32(state.h),
+		i32(state.stride),
+		wl_shm.Format.Xrgb8888,
+	)
+	if err != nil do os.exit(int(err))
+	state.wl_buffer = state.wayland_current_id
+}
+
+draw_next_frame :: proc(state: ^state_t) {
+	assert(state.wl_surface != 0)
+	assert(state.xdg_surface != 0)
+	assert(state.xdg_toplevel != 0)
+	assert(state.shm_pool_data != nil)
+	assert(state.shm_pool_size != 0)
+
+	pixels := ([^]u32)(state.shm_pool_data)
+	for i: u32 = 0; i < state.w * state.h; i += 1 {
+		border_size :: 4
+		x := u8(i % state.w)
+		y := u8(i / state.w)
+
+		r, g, b: u8
+		// if (x > border_size && u32(x) < state.w - border_size) &&
+		//    (y > border_size && u32(y) < state.h - border_size) {
+		r = (((x / 10) + (y / 10)) % 2) * 255
+		g = (((x / 10) + (y / 10)) % 2) * 255
+		b = (((x / 10) + (y / 10)) % 2) * 255
+		//}
+
+		pixels[i] = (u32(r) << 16) | (u32(g) << 8) | u32(b)
+	}
+
+	err: linux.Errno
+	err = wl_surface.attach(state.socket_fd, state.wl_surface, state.wl_buffer, 0, 0)
+	if err != nil do os.exit(int(err))
+	err = wl_surface.commit(state.socket_fd, state.wl_surface)
+	if err != nil do os.exit(int(err))
+
+	state.state = .STATE_SURFACE_ATTACHED
+}
 
 handle_signal :: proc "c" (sig: posix.Signal) {
 	#partial switch sig {
 	case .SIGTERM, .SIGINT:
 		running = false
 	}
+}
+
+set_dimensions :: proc(state: ^state_t, w: u32, h: u32) {
+	assert(w < state.max_w)
+	assert(h < state.max_h)
+	state.w = w
+	state.h = h
+
+	state.stride = state.w * color_channels
+	state.shm_pool_size = state.h * state.stride
 }
 
 main :: proc() {
@@ -403,135 +545,27 @@ main :: proc() {
 
 	state: state_t = {
 		wayland_current_id = 1,
+		socket_fd          = socket_fd,
 	}
+
 	state.wayland_current_id += 1
 	err := wl_display.get_registry(socket_fd, wayland_display_object_id, state.wayland_current_id)
 	if err != nil do os.exit(int(err))
-
 	state.wl_registry = state.wayland_current_id
-	state.w = 117
-	state.h = 150
-	state.stride = 117 * color_channels
-	state.socket_fd = socket_fd
-
-	state.shm_pool_size = state.h * state.stride
-	create_shared_memory_file(&state)
 
 	for running {
-		read_buf: [4096]u8
-		read_bytes, recv_error := linux.recv(socket_fd, read_buf[:], {})
+		wayland_handle_messages(&state)
 
-		if read_bytes == -1 || recv_error != nil {
-			fmt.eprintln("Failed to receive new events")
-			os.exit(int(recv_error))
-		}
-
-		fmt.printfln("Received %d bytes", read_bytes)
-
-		msg := &read_buf[0]
-		msg_len := int(read_bytes)
-
-		for msg_len > 0 {
-			wayland_handle_message(socket_fd, &state, &msg, &msg_len)
-		}
-
-		if (state.wl_compositor != 0 &&
-			   state.wl_shm != 0 &&
-			   state.xdg_wm_base != 0 &&
-			   state.wl_surface == 0) {
-			assert(state.state == .STATE_NONE)
-
-			state.wayland_current_id += 1
-			err = wl_compositor.create_surface(
-				socket_fd,
-				state.wl_compositor,
-				state.wayland_current_id,
-			)
-			if err != nil do os.exit(int(err))
-			state.wl_surface = state.wayland_current_id
-
-			state.wayland_current_id += 1
-			err = xdg_wm_base.get_xdg_surface(
-				socket_fd,
-				state.xdg_wm_base,
-				state.wayland_current_id,
-				state.wl_surface,
-			)
-			if err != nil do os.exit(int(err))
-			state.xdg_surface = state.wayland_current_id
-
-			state.wayland_current_id += 1
-			err = xdg_surface.get_toplevel(socket_fd, state.xdg_surface, state.wayland_current_id)
-			if err != nil do os.exit(int(err))
-			state.xdg_toplevel = state.wayland_current_id
-
-			err = wl_surface.commit(socket_fd, state.wl_surface)
-			if err != nil do os.exit(int(err))
+		if (can_complete_initialization(&state)) {
+			complete_initialization(&state)
 		}
 
 		if (state.state == .STATE_SURFACE_ACKED_CONFIGURE) {
-			assert(state.wl_surface != 0)
-			assert(state.xdg_surface != 0)
-			assert(state.xdg_toplevel != 0)
-
-			if (state.wl_shm_pool == 0) {
-				state.wayland_current_id += 1
-				err = wl_shm.create_pool(
-					socket_fd,
-					state.wl_shm,
-					state.wayland_current_id,
-					state.shm_fd,
-					i32(state.shm_pool_size),
-				)
-				if err != nil do os.exit(int(err))
-				state.wl_shm_pool = state.wayland_current_id
-			}
-			if (state.wl_buffer == 0) {
-				state.wayland_current_id += 1
-				err = wl_shm_pool.create_buffer(
-					socket_fd,
-					state.wl_shm_pool,
-					state.wayland_current_id,
-					0,
-					i32(state.w),
-					i32(state.h),
-					i32(state.stride),
-					wl_shm.Format.Xrgb8888,
-				)
-				if err != nil do os.exit(int(err))
-				state.wl_buffer = state.wayland_current_id
-			}
-
-			assert(state.shm_pool_data != nil)
-			assert(state.shm_pool_size != 0)
-
-			pixels := ([^]u32)(state.shm_pool_data)
-			for i: u32 = 0; i < state.w * state.h; i += 1 {
-				border_size :: 4
-				x := u8(i % state.w)
-				y := u8(i / state.w)
-
-				r, g, b: u8
-				// if (x > border_size && u32(x) < state.w - border_size) &&
-				//    (y > border_size && u32(y) < state.h - border_size) {
-				r = (((x / 10) + (y / 10)) % 2) * 255
-				g = (((x / 10) + (y / 10)) % 2) * 255
-				b = (((x / 10) + (y / 10)) % 2) * 255
-				//}
-
-				pixels[i] = (u32(r) << 16) | (u32(g) << 8) | u32(b)
-			}
-
-			err = wl_surface.attach(socket_fd, state.wl_surface, state.wl_buffer, 0, 0)
-			if err != nil do os.exit(int(err))
-			err = wl_surface.commit(socket_fd, state.wl_surface)
-			if err != nil do os.exit(int(err))
-
-			state.state = .STATE_SURFACE_ATTACHED
+			draw_next_frame(&state)
 		}
 	}
 
 	fmt.println("Got termination signal. Terminating...")
-	cleanup_shared_memory_file(&state)
+	if (state.shm_pool_data != nil) do cleanup_shared_memory_file(&state)
 	wayland_display_connection_cleanup(socket_fd)
 }
