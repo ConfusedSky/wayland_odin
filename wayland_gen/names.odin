@@ -32,6 +32,10 @@ to_camel_case :: proc(s: string) -> string {
 			continue
 		}
 		if capitalise_next {
+			if unicode.is_digit(ch) {
+				// Identifiers cannot start with a digit; prefix with underscore
+				strings.write_byte(&sb, '_')
+			}
 			strings.write_rune(&sb, unicode.to_upper(ch))
 			capitalise_next = false
 		} else {
