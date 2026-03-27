@@ -53,6 +53,7 @@ state_t :: struct {
 	shm_pool_data:      ^u8,
 	state:              state_state_t,
 	wayland_current_id: u32,
+	event_handlers:     [dynamic]RegisteredEventHandler,
 }
 
 // Event handler callbacks
@@ -74,6 +75,7 @@ _on_wl_registry_global :: proc(name: u32, interface: string, version: u32, user_
 			version,
 			state.wayland_current_id,
 		)
+		register_event_handler(state, state.wl_shm, &wl_shm_handlers, wl_shm.handle_event)
 	} else if interface == "xdg_wm_base" {
 		state.wayland_current_id += 1
 		state.xdg_wm_base = registry_bind(
@@ -83,6 +85,12 @@ _on_wl_registry_global :: proc(name: u32, interface: string, version: u32, user_
 			interface,
 			version,
 			state.wayland_current_id,
+		)
+		register_event_handler(
+			state,
+			state.xdg_wm_base,
+			&xdg_wm_base_handlers,
+			xdg_wm_base.handle_event,
 		)
 	} else if interface == "wl_compositor" {
 		state.wayland_current_id += 1
@@ -144,36 +152,25 @@ HandleEventProc :: proc(
 )
 
 RegisteredEventHandler :: struct {
-	handle_event:   HandleEventProc,
-	get_object:     proc(state: ^state_t) -> u32,
 	event_handlers: rawptr,
+	handle_event:   HandleEventProc,
+	object_id:      u32,
 }
 
-event_handlers := [?]RegisteredEventHandler {
-	{handle_event = wl_buffer.handle_event, get_object = proc(state: ^state_t) -> u32 {
-			return state.wl_buffer
-		}, event_handlers = &wl_buffer_handlers},
-	{handle_event = wl_display.handle_event, get_object = proc(state: ^state_t) -> u32 {
-			return wayland_display_object_id
-		}, event_handlers = &wl_display_handlers},
-	{handle_event = wl_registry.handle_event, get_object = proc(state: ^state_t) -> u32 {
-			return state.wl_registry
-		}, event_handlers = &wl_registry_handlers},
-	{handle_event = wl_surface.handle_event, get_object = proc(state: ^state_t) -> u32 {
-			return state.wl_surface
-		}, event_handlers = &wl_surface_handlers},
-	{handle_event = wl_shm.handle_event, get_object = proc(state: ^state_t) -> u32 {
-			return state.wl_shm
-		}, event_handlers = &wl_shm_handlers},
-	{handle_event = xdg_wm_base.handle_event, get_object = proc(state: ^state_t) -> u32 {
-			return state.xdg_wm_base
-		}, event_handlers = &xdg_wm_base_handlers},
-	{handle_event = xdg_toplevel.handle_event, get_object = proc(state: ^state_t) -> u32 {
-			return state.xdg_toplevel
-		}, event_handlers = &xdg_toplevel_handlers},
-	{handle_event = xdg_surface.handle_event, get_object = proc(state: ^state_t) -> u32 {
-			return state.xdg_surface
-		}, event_handlers = &xdg_surface_handlers},
+register_event_handler :: proc(
+	state: ^state_t,
+	object_id: u32,
+	event_handlers: rawptr,
+	handle_event: HandleEventProc,
+) {
+	append(
+		&state.event_handlers,
+		RegisteredEventHandler {
+			event_handlers = event_handlers,
+			object_id = object_id,
+			handle_event = handle_event,
+		},
+	)
 }
 
 wayland_display_connect :: proc() -> linux.Fd {
@@ -391,9 +388,10 @@ wayland_handle_message :: proc(state: ^state_t, msg: ^^u8, msg_len: ^int) {
 
 	object_found := false
 
-	for handler in event_handlers {
-		if object_id == handler.get_object(state) {
+	for handler in state.event_handlers {
+		if object_id == handler.object_id {
 			object_found = true
+			context.user_index = int(object_id)
 			handler.handle_event(object_id, opcode, msg, msg_len, handler.event_handlers, state)
 			break
 		}
@@ -420,10 +418,6 @@ wayland_handle_message :: proc(state: ^state_t, msg: ^^u8, msg_len: ^int) {
 
 can_complete_initialization :: proc(state: ^state_t) -> bool {
 	return(
-		state.w > 0 &&
-		state.h > 0 &&
-		state.max_w > 0 &&
-		state.max_h > 0 &&
 		state.wl_compositor != 0 &&
 		state.wl_shm != 0 &&
 		state.xdg_wm_base != 0 &&
@@ -433,7 +427,6 @@ can_complete_initialization :: proc(state: ^state_t) -> bool {
 
 complete_initialization :: proc(state: ^state_t) {
 	assert(state.state == .STATE_NONE)
-	create_shared_memory_file(state)
 
 	state.wayland_current_id += 1
 	err := wl_compositor.create_surface(
@@ -443,6 +436,7 @@ complete_initialization :: proc(state: ^state_t) {
 	)
 	if err != nil do os.exit(int(err))
 	state.wl_surface = state.wayland_current_id
+	register_event_handler(state, state.wl_surface, &wl_surface_handlers, wl_surface.handle_event)
 
 	state.wayland_current_id += 1
 	err = xdg_wm_base.get_xdg_surface(
@@ -453,11 +447,23 @@ complete_initialization :: proc(state: ^state_t) {
 	)
 	if err != nil do os.exit(int(err))
 	state.xdg_surface = state.wayland_current_id
+	register_event_handler(
+		state,
+		state.xdg_surface,
+		&xdg_surface_handlers,
+		xdg_surface.handle_event,
+	)
 
 	state.wayland_current_id += 1
 	err = xdg_surface.get_toplevel(state.socket_fd, state.xdg_surface, state.wayland_current_id)
 	if err != nil do os.exit(int(err))
 	state.xdg_toplevel = state.wayland_current_id
+	register_event_handler(
+		state,
+		state.xdg_toplevel,
+		&xdg_toplevel_handlers,
+		xdg_toplevel.handle_event,
+	)
 
 	err = wl_surface.commit(state.socket_fd, state.wl_surface)
 	if err != nil do os.exit(int(err))
@@ -485,6 +491,7 @@ complete_initialization :: proc(state: ^state_t) {
 	)
 	if err != nil do os.exit(int(err))
 	state.wl_buffer = state.wayland_current_id
+	register_event_handler(state, state.wl_buffer, &wl_buffer_handlers, wl_buffer.handle_event)
 }
 
 draw_next_frame :: proc(state: ^state_t) {
@@ -548,10 +555,29 @@ main :: proc() {
 		socket_fd          = socket_fd,
 	}
 
+	register_event_handler(
+		&state,
+		wayland_display_object_id,
+		&wl_display_handlers,
+		wl_display.handle_event,
+	)
+
+	state.max_w = 10000
+	state.max_h = 10000
+	set_dimensions(&state, 50, 50)
+
+	create_shared_memory_file(&state)
+
 	state.wayland_current_id += 1
 	err := wl_display.get_registry(socket_fd, wayland_display_object_id, state.wayland_current_id)
 	if err != nil do os.exit(int(err))
 	state.wl_registry = state.wayland_current_id
+	register_event_handler(
+		&state,
+		state.wl_registry,
+		&wl_registry_handlers,
+		wl_registry.handle_event,
+	)
 
 	for running {
 		wayland_handle_messages(&state)
