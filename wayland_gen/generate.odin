@@ -160,6 +160,10 @@ emit_request_proc :: proc(sb: ^strings.Builder, req: ^Request, iface_name: strin
 	strings.builder_init(&print_args_sb)
 	defer strings.builder_destroy(&print_args_sb)
 
+	asserts_sb: strings.Builder
+	strings.builder_init(&asserts_sb)
+	defer strings.builder_destroy(&asserts_sb)
+
 	fd_param: string
 	first_print_arg := true
 	needs_string_size := false
@@ -179,6 +183,10 @@ emit_request_proc :: proc(sb: ^strings.Builder, req: ^Request, iface_name: strin
 		type_str := arg_type_to_odin_type(arg)
 		fmt.sbprintf(sb, ", %s: %s", param_name, type_str)
 		delete(type_str)
+
+		if arg.type == "object" {
+			fmt.sbprintf(&asserts_sb, "\tassert(%s > 0)\n", param_name)
+		}
 
 		if arg.type == "fd" {
 			fd_param = param_name // not owned — arg.name persists for lifetime of req
@@ -221,6 +229,8 @@ emit_request_proc :: proc(sb: ^strings.Builder, req: ^Request, iface_name: strin
 		needs_string_size ? "constants.BUF_WRITER_SIZE_STRING" : "constants.BUF_WRITER_SIZE_BASE"
 
 	strings.write_string(sb, ") -> linux.Errno {\n")
+	fmt.sbprintf(sb, "\tassert(%s > 0)\n", iface_name)
+	strings.write_string(sb, strings.to_string(asserts_sb))
 	fmt.sbprintf(sb, "\twriter: buf_writer.Writer(%s)\n", size_const)
 	fmt.sbprintf(sb, "\tbuf_writer.initialize(&writer, %s, %s_REQUEST_OPCODE)\n", iface_name, upper)
 	strings.write_string(sb, strings.to_string(write_calls_sb))
