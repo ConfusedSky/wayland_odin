@@ -88,11 +88,7 @@ write_u32_raw :: proc(buf: ^u8, buf_size: ^int, buf_cap: int, x: u32) {
 
 @(private)
 write_i32_raw :: proc(buf: ^u8, buf_size: ^int, buf_cap: int, x: i32) {
-	destination := mem.ptr_offset(buf, buf_size^)
-	assert(buf_size^ + size_of(x) <= buf_cap)
-	assert(uintptr(destination) % size_of(x) == 0)
-	(^i32)(destination)^ = x
-	buf_size^ += size_of(u32)
+	write_u32_raw(buf, buf_size, buf_cap, transmute(u32)x)
 }
 
 @(private)
