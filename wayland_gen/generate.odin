@@ -408,13 +408,17 @@ emit_handle_event_proc :: proc(sb: ^strings.Builder, iface: ^Interface) {
 			fmt.sbprintf(&call_args_sb, "%s, ", arg.name)
 		}
 
+		print_fmt := strings.to_string(print_fmt_sb)
+		separator := " " if len(print_fmt) > 0 else ""
 		fmt.sbprintf(
 			sb,
-			"\t\tfmt.printfln(\"<- %s@%%v.%s: %s\", object_id%s)\n",
+			"\t\tfmt.printfln(\"<- %s@%%v.%s: %s%s[%%s]\", object_id%s, \"handled\" if handlers.on_%s != nil else \"unhandled\")\n",
 			iface.name,
 			ev.name,
-			strings.to_string(print_fmt_sb),
+			print_fmt,
+			separator,
 			strings.to_string(print_args_sb),
+			ev.name,
 		)
 		fmt.sbprintf(sb, "\t\tif handlers.on_%s != nil do handlers.on_%s(%suser_data)\n",
 			ev.name, ev.name, strings.to_string(call_args_sb))
