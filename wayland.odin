@@ -119,6 +119,41 @@ xdg_surface_handlers := xdg_surface.EventHandlers {
 	on_configure = _on_xdg_surface_configure,
 }
 
+HandleEventProc :: proc(object_id: u32, opcode: u16, msg: ^^u8, msg_len: ^int, handlers_raw: rawptr, user_data: rawptr)
+
+RegisteredEventHandler :: struct {
+	handle_event:   HandleEventProc,
+	get_object:     proc(state: ^state_t) -> u32,
+	event_handlers: rawptr,
+}
+
+event_handlers := [?]RegisteredEventHandler {
+	{handle_event = wl_buffer.handle_event, get_object = proc(state: ^state_t) -> u32 {
+			return state.wl_buffer
+		}, event_handlers = &wl_buffer_handlers},
+	{handle_event = wl_display.handle_event, get_object = proc(state: ^state_t) -> u32 {
+			return wayland_display_object_id
+		}, event_handlers = &wl_display_handlers},
+	{handle_event = wl_registry.handle_event, get_object = proc(state: ^state_t) -> u32 {
+			return state.wl_registry
+		}, event_handlers = &wl_registry_handlers},
+	{handle_event = wl_surface.handle_event, get_object = proc(state: ^state_t) -> u32 {
+			return state.wl_surface
+		}, event_handlers = &wl_surface_handlers},
+	{handle_event = wl_shm.handle_event, get_object = proc(state: ^state_t) -> u32 {
+			return state.wl_shm
+		}, event_handlers = &wl_shm_handlers},
+	{handle_event = xdg_wm_base.handle_event, get_object = proc(state: ^state_t) -> u32 {
+			return state.xdg_wm_base
+		}, event_handlers = &xdg_wm_base_handlers},
+	{handle_event = xdg_toplevel.handle_event, get_object = proc(state: ^state_t) -> u32 {
+			return state.xdg_toplevel
+		}, event_handlers = &xdg_toplevel_handlers},
+	{handle_event = xdg_surface.handle_event, get_object = proc(state: ^state_t) -> u32 {
+			return state.xdg_surface
+		}, event_handlers = &xdg_surface_handlers},
+}
+
 wayland_display_connect :: proc() -> linux.Fd {
 	xdg_runtime_dir_buf: [64]u8 = ---
 	xdg_runtime_dir, xdg_runtime_dir_error := os.lookup_env(
@@ -305,23 +340,17 @@ wayland_handle_message :: proc(fd: linux.Fd, state: ^state_t, msg: ^^u8, msg_len
 	body_size := int(announced_size) - int(header_size)
 	msg_len_before_body := msg_len^
 
-	if object_id == state.wl_buffer {
-		wl_buffer.handle_event(object_id, opcode, msg, msg_len, &wl_buffer_handlers, state)
-	} else if object_id == wayland_display_object_id {
-		wl_display.handle_event(object_id, opcode, msg, msg_len, &wl_display_handlers, state)
-	} else if object_id == state.wl_registry {
-		wl_registry.handle_event(object_id, opcode, msg, msg_len, &wl_registry_handlers, state)
-	} else if object_id == state.wl_surface {
-		wl_surface.handle_event(object_id, opcode, msg, msg_len, &wl_surface_handlers, state)
-	} else if object_id == state.wl_shm {
-		wl_shm.handle_event(object_id, opcode, msg, msg_len, &wl_shm_handlers, state)
-	} else if object_id == state.xdg_wm_base {
-		xdg_wm_base.handle_event(object_id, opcode, msg, msg_len, &xdg_wm_base_handlers, state)
-	} else if object_id == state.xdg_toplevel {
-		xdg_toplevel.handle_event(object_id, opcode, msg, msg_len, &xdg_toplevel_handlers, state)
-	} else if object_id == state.xdg_surface {
-		xdg_surface.handle_event(object_id, opcode, msg, msg_len, &xdg_surface_handlers, state)
-	} else {
+	object_found := false
+
+	for handler in event_handlers {
+		if object_id == handler.get_object(state) {
+			object_found = true
+			handler.handle_event(object_id, opcode, msg, msg_len, handler.event_handlers, state)
+			break
+		}
+	}
+
+	if !object_found {
 		fmt.eprintfln(
 			"unknown event: object_id=%d opcode=%d size=%d state=%v, skipping...",
 			object_id,
