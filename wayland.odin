@@ -2,6 +2,14 @@ package Main
 
 import buf_writer "./buf_writer"
 import constants "./constants"
+import "base:intrinsics"
+import "core:fmt"
+import "core:mem"
+import "core:os"
+import "core:strings"
+import "core:sys/linux"
+import "core:sys/posix"
+import wl_buffer "wayland_protocol/wl_buffer"
 import wl_compositor "wayland_protocol/wl_compositor"
 import wl_display "wayland_protocol/wl_display"
 import wl_registry "wayland_protocol/wl_registry"
@@ -11,13 +19,6 @@ import wl_surface "wayland_protocol/wl_surface"
 import xdg_surface "wayland_protocol/xdg_surface"
 import xdg_toplevel "wayland_protocol/xdg_toplevel"
 import xdg_wm_base "wayland_protocol/xdg_wm_base"
-import "base:intrinsics"
-import "core:fmt"
-import "core:mem"
-import "core:os"
-import "core:strings"
-import "core:sys/linux"
-import "core:sys/posix"
 
 
 wayland_current_id: u32 = 1
@@ -67,9 +68,21 @@ _on_wl_registry_global :: proc(name: u32, interface: string, version: u32, user_
 	if interface == "wl_shm" {
 		ctx.state.wl_shm = registry_bind(ctx.fd, ctx.state.wl_registry, name, interface, version)
 	} else if interface == "xdg_wm_base" {
-		ctx.state.xdg_wm_base = registry_bind(ctx.fd, ctx.state.wl_registry, name, interface, version)
+		ctx.state.xdg_wm_base = registry_bind(
+			ctx.fd,
+			ctx.state.wl_registry,
+			name,
+			interface,
+			version,
+		)
 	} else if interface == "wl_compositor" {
-		ctx.state.wl_compositor = registry_bind(ctx.fd, ctx.state.wl_registry, name, interface, version)
+		ctx.state.wl_compositor = registry_bind(
+			ctx.fd,
+			ctx.state.wl_registry,
+			name,
+			interface,
+			version,
+		)
 	}
 }
 
@@ -91,12 +104,14 @@ _on_xdg_surface_configure :: proc(serial: u32, user_data: rawptr) {
 }
 
 // Per-interface event handler tables
+wl_buffer_handlers: wl_buffer.EventHandlers
 wl_display_handlers := wl_display.EventHandlers {
 	on_error = _on_wl_display_error,
 }
 wl_registry_handlers := wl_registry.EventHandlers {
 	on_global = _on_wl_registry_global,
 }
+wl_surface_handlers: wl_surface.EventHandlers
 wl_shm_handlers: wl_shm.EventHandlers
 xdg_wm_base_handlers := xdg_wm_base.EventHandlers {
 	on_ping = _on_xdg_wm_base_ping,
@@ -282,24 +297,31 @@ cleanup_shared_memory_file :: proc(state: ^state_t) {
 wayland_handle_message :: proc(fd: linux.Fd, state: ^state_t, msg: ^^u8, msg_len: ^int) {
 	assert(msg_len^ >= 8)
 
-	object_id      := buf_read_unsigned_int(msg, msg_len, u32)
+	object_id := buf_read_unsigned_int(msg, msg_len, u32)
 	assert(object_id <= wayland_current_id)
-	opcode         := buf_read_unsigned_int(msg, msg_len, u16)
+	opcode := buf_read_unsigned_int(msg, msg_len, u16)
 	announced_size := buf_read_unsigned_int(msg, msg_len, u16)
 
 	header_size: u16 = size_of(object_id) + size_of(opcode) + size_of(announced_size)
 	assert(announced_size % 4 == 0)
 	assert(int(announced_size) <= int(header_size) + msg_len^)
 
-	body_size           := int(announced_size) - int(header_size)
+	body_size := int(announced_size) - int(header_size)
 	msg_len_before_body := msg_len^
 
-	ctx := HandleContext{fd = fd, state = state}
+	ctx := HandleContext {
+		fd    = fd,
+		state = state,
+	}
 
-	if object_id == wayland_display_object_id {
+	if object_id == state.wl_buffer {
+		wl_buffer.handle_event(object_id, opcode, msg, msg_len, &wl_buffer_handlers, &ctx)
+	} else if object_id == wayland_display_object_id {
 		wl_display.handle_event(object_id, opcode, msg, msg_len, &wl_display_handlers, &ctx)
 	} else if object_id == state.wl_registry {
 		wl_registry.handle_event(object_id, opcode, msg, msg_len, &wl_registry_handlers, &ctx)
+	} else if object_id == state.wl_surface {
+		wl_surface.handle_event(object_id, opcode, msg, msg_len, &wl_surface_handlers, &ctx)
 	} else if object_id == state.wl_shm {
 		wl_shm.handle_event(object_id, opcode, msg, msg_len, &wl_shm_handlers, &ctx)
 	} else if object_id == state.xdg_wm_base {
