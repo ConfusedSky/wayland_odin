@@ -193,17 +193,33 @@ emit_request_proc :: proc(sb: ^strings.Builder, req: ^Request, iface_name: strin
 		} else {
 			switch {
 			case arg.enum_ref != "":
-				fmt.sbprintf(&write_calls_sb, "\tbuf_writer.write_u32(&writer, transmute(u32)%s)\n", param_name)
+				fmt.sbprintf(
+					&write_calls_sb,
+					"\tbuf_writer.write_u32(&writer, transmute(u32)%s)\n",
+					param_name,
+				)
 			case arg.type == "uint", arg.type == "object", arg.type == "new_id":
 				fmt.sbprintf(&write_calls_sb, "\tbuf_writer.write_u32(&writer, %s)\n", param_name)
 			case arg.type == "int":
 				fmt.sbprintf(&write_calls_sb, "\tbuf_writer.write_i32(&writer, %s)\n", param_name)
 			case arg.type == "fixed":
-				fmt.sbprintf(&write_calls_sb, "\tbuf_writer.write_i32(&writer, i32(%s * 256))\n", param_name)
+				fmt.sbprintf(
+					&write_calls_sb,
+					"\tbuf_writer.write_i32(&writer, i32(%s * 256))\n",
+					param_name,
+				)
 			case arg.type == "string":
-				fmt.sbprintf(&write_calls_sb, "\tbuf_writer.write_string(&writer, %s)\n", param_name)
+				fmt.sbprintf(
+					&write_calls_sb,
+					"\tbuf_writer.write_string(&writer, %s)\n",
+					param_name,
+				)
 			case arg.type == "array":
-				fmt.sbprintf(&write_calls_sb, "\tbuf_writer.write_array(&writer, %s)\n", param_name)
+				fmt.sbprintf(
+					&write_calls_sb,
+					"\tbuf_writer.write_array(&writer, %s)\n",
+					param_name,
+				)
 			}
 
 			if first_print_arg {
@@ -232,14 +248,13 @@ emit_request_proc :: proc(sb: ^strings.Builder, req: ^Request, iface_name: strin
 	fmt.sbprintf(sb, "\tassert(%s > 0)\n", iface_name)
 	strings.write_string(sb, strings.to_string(asserts_sb))
 	fmt.sbprintf(sb, "\twriter: buf_writer.Writer(%s)\n", size_const)
-	fmt.sbprintf(sb, "\tbuf_writer.initialize(&writer, %s, %s_REQUEST_OPCODE)\n", iface_name, upper)
+	fmt.sbprintf(
+		sb,
+		"\tbuf_writer.initialize(&writer, %s, %s_REQUEST_OPCODE)\n",
+		iface_name,
+		upper,
+	)
 	strings.write_string(sb, strings.to_string(write_calls_sb))
-	if fd_param != "" {
-		fmt.sbprintf(sb, "\tsend_err := buf_writer.send_with_fd(&writer, socket, %s)\n", fd_param)
-	} else {
-		strings.write_string(sb, "\tsend_err := buf_writer.send(&writer, socket)\n")
-	}
-	strings.write_string(sb, "\tif send_err != nil do return send_err\n")
 	fmt.sbprintf(
 		sb,
 		"\tfmt.printfln(\"-> %s@%%v.%s: %s\", %s%s)\n",
@@ -249,7 +264,11 @@ emit_request_proc :: proc(sb: ^strings.Builder, req: ^Request, iface_name: strin
 		iface_name,
 		strings.to_string(print_args_sb),
 	)
-	strings.write_string(sb, "\treturn nil\n")
+	if fd_param != "" {
+		fmt.sbprintf(sb, "\treturn buf_writer.send_with_fd(&writer, socket, %s)\n", fd_param)
+	} else {
+		strings.write_string(sb, "\treturn buf_writer.send(&writer, socket)\n")
+	}
 	strings.write_string(sb, "}\n\n")
 }
 
