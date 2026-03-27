@@ -25,10 +25,11 @@ generate :: proc(output_dir: string, p: ^Protocol) -> bool {
 
 // Scans the interface to determine what imports the generated file needs.
 // has_requests is true when the interface has any requests, which controls
-// linux/buf_writer/constants imports and request proc generation.
+// fmt/buf_writer/constants imports and request proc generation.
+// has_event_fd is true when any event arg is fd-typed, requiring linux import.
 // cross_pkgs entries are slices into existing enum_ref strings (not owned).
 // Caller owns the returned dynamic array itself.
-collect_imports :: proc(iface: ^Interface) -> (has_requests: bool, cross_pkgs: [dynamic]string) {
+collect_imports :: proc(iface: ^Interface) -> (has_requests: bool, has_event_fd: bool, cross_pkgs: [dynamic]string) {
 	seen: map[string]bool
 	defer delete(seen)
 
@@ -36,6 +37,21 @@ collect_imports :: proc(iface: ^Interface) -> (has_requests: bool, cross_pkgs: [
 
 	for &req in iface.requests {
 		for &arg in req.args {
+			if arg.enum_ref != "" {
+				pkg, _, cross := split_enum_ref(arg.enum_ref)
+				if cross && !seen[pkg] {
+					seen[pkg] = true
+					append(&cross_pkgs, pkg)
+				}
+			}
+		}
+	}
+
+	for &ev in iface.events {
+		for &arg in ev.args {
+			if arg.type == "fd" {
+				has_event_fd = true
+			}
 			if arg.enum_ref != "" {
 				pkg, _, cross := split_enum_ref(arg.enum_ref)
 				if cross && !seen[pkg] {
@@ -71,15 +87,24 @@ generate_interface :: proc(output_dir: string, iface: ^Interface) -> bool {
 	fmt.sbprintf(&sb, "package %s\n", iface.name)
 
 	// Imports
-	has_requests, cross_pkgs := collect_imports(iface)
+	has_requests, has_event_fd, cross_pkgs := collect_imports(iface)
 	defer delete(cross_pkgs)
-	if has_requests || len(cross_pkgs) > 0 {
+	has_events := len(iface.events) > 0
+	needs_linux := has_requests || has_event_fd
+	if has_requests || has_events || needs_linux || len(cross_pkgs) > 0 {
 		strings.write_byte(&sb, '\n')
-		if has_requests {
+		if has_requests || has_events {
 			strings.write_string(&sb, "import \"core:fmt\"\n")
+		}
+		if needs_linux {
 			strings.write_string(&sb, "import \"core:sys/linux\"\n")
+		}
+		if has_requests {
 			strings.write_string(&sb, "import buf_writer \"../../buf_writer\"\n")
 			strings.write_string(&sb, "import constants \"../../constants\"\n")
+		}
+		if has_events {
+			strings.write_string(&sb, "import buf_reader \"../../buf_reader\"\n")
 		}
 		for pkg in cross_pkgs {
 			fmt.sbprintf(&sb, "import %s \"../%s\"\n", pkg, pkg)
@@ -107,6 +132,9 @@ generate_interface :: proc(output_dir: string, iface: ^Interface) -> bool {
 		for &ev in iface.events {
 			emit_event(&sb, &ev)
 		}
+		emit_event_handlers_struct(&sb, iface)
+		strings.write_byte(&sb, '\n')
+		emit_handle_event_proc(&sb, iface)
 	}
 
 	// Enums
@@ -287,8 +315,113 @@ emit_event :: proc(sb: ^strings.Builder, ev: ^Event) {
 		fmt.sbprintf(sb, "%s\n", arg_comments)
 	}
 	fmt.sbprintf(sb, "%s_EVENT_ARG_COUNT :: %d\n", upper, len(ev.args))
+	emit_event_handler(sb, ev)
 
 	strings.write_byte(sb, '\n')
+}
+
+emit_event_handler :: proc(sb: ^strings.Builder, ev: ^Event) {
+	handler_name := strings.concatenate({"On", to_camel_case(ev.name)})
+	defer delete(handler_name)
+
+	fmt.sbprintf(sb, "%s :: proc(", handler_name)
+	for arg, i in ev.args {
+		if i > 0 do strings.write_string(sb, ", ")
+		type_str := arg_type_to_odin_type(arg)
+		defer delete(type_str)
+		fmt.sbprintf(sb, "%s: %s", arg.name, type_str)
+	}
+	if len(ev.args) > 0 do strings.write_string(sb, ", ")
+	strings.write_string(sb, "user_data: rawptr)\n")
+}
+
+emit_event_handlers_struct :: proc(sb: ^strings.Builder, iface: ^Interface) {
+	strings.write_string(sb, "EventHandlers :: struct {\n")
+	for &ev in iface.events {
+		handler_name := strings.concatenate({"On", to_camel_case(ev.name)})
+		defer delete(handler_name)
+		fmt.sbprintf(sb, "\ton_%s: %s,\n", ev.name, handler_name)
+	}
+	strings.write_string(sb, "}\n")
+}
+
+emit_handle_event_proc :: proc(sb: ^strings.Builder, iface: ^Interface) {
+	fmt.sbprintf(
+		sb,
+		"handle_event :: proc(object_id: u32, opcode: u16, msg: ^^u8, msg_len: ^int, handlers: ^EventHandlers, user_data: rawptr) {{\n",
+	)
+	strings.write_string(sb, "\tswitch opcode {\n")
+
+	for &ev in iface.events {
+		upper := to_upper_snake(ev.name)
+		defer delete(upper)
+
+		fmt.sbprintf(sb, "\tcase %s_EVENT_OPCODE:\n", upper)
+
+		// Emit read calls and track print format/args and handler call args
+		print_fmt_sb: strings.Builder
+		strings.builder_init(&print_fmt_sb)
+		defer strings.builder_destroy(&print_fmt_sb)
+
+		print_args_sb: strings.Builder
+		strings.builder_init(&print_args_sb)
+		defer strings.builder_destroy(&print_args_sb)
+
+		call_args_sb: strings.Builder
+		strings.builder_init(&call_args_sb)
+		defer strings.builder_destroy(&call_args_sb)
+
+		first_print_arg := true
+
+		for &arg in ev.args {
+			if arg.type == "fd" {
+				fmt.sbprintf(sb, "\t\t// skipped fd arg '%s': received via ancillary data\n", arg.name)
+				continue
+			}
+
+			switch {
+			case arg.enum_ref != "":
+				type_str := arg_type_to_odin_type(arg)
+				defer delete(type_str)
+				fmt.sbprintf(sb, "\t\t%s := transmute(%s)(buf_reader.read_u32(msg, msg_len))\n", arg.name, type_str)
+			case arg.type == "uint", arg.type == "object", arg.type == "new_id":
+				fmt.sbprintf(sb, "\t\t%s := buf_reader.read_u32(msg, msg_len)\n", arg.name)
+			case arg.type == "int":
+				fmt.sbprintf(sb, "\t\t%s := buf_reader.read_i32(msg, msg_len)\n", arg.name)
+			case arg.type == "fixed":
+				fmt.sbprintf(sb, "\t\t%s := buf_reader.read_fixed(msg, msg_len)\n", arg.name)
+			case arg.type == "string":
+				fmt.sbprintf(sb, "\t\t%s := buf_reader.read_string(msg, msg_len)\n", arg.name)
+				fmt.sbprintf(sb, "\t\tdefer delete(%s)\n", arg.name)
+			case arg.type == "array":
+				fmt.sbprintf(sb, "\t\t%s := buf_reader.read_array(msg, msg_len)\n", arg.name)
+				fmt.sbprintf(sb, "\t\tdefer delete(%s)\n", arg.name)
+			}
+
+			if first_print_arg {
+				fmt.sbprintf(&print_fmt_sb, "%s=%%v", arg.name)
+				first_print_arg = false
+			} else {
+				fmt.sbprintf(&print_fmt_sb, " %s=%%v", arg.name)
+			}
+			fmt.sbprintf(&print_args_sb, ", %s", arg.name)
+			fmt.sbprintf(&call_args_sb, "%s, ", arg.name)
+		}
+
+		fmt.sbprintf(
+			sb,
+			"\t\tfmt.printfln(\"<- %s@%%v.%s: %s\", object_id%s)\n",
+			iface.name,
+			ev.name,
+			strings.to_string(print_fmt_sb),
+			strings.to_string(print_args_sb),
+		)
+		fmt.sbprintf(sb, "\t\tif handlers.on_%s != nil do handlers.on_%s(%suser_data)\n",
+			ev.name, ev.name, strings.to_string(call_args_sb))
+	}
+
+	strings.write_string(sb, "\t}\n")
+	strings.write_string(sb, "}\n")
 }
 
 emit_enum :: proc(sb: ^strings.Builder, en: ^Enum, iface_name: string) {
