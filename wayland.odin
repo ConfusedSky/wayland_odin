@@ -1,7 +1,17 @@
 package Main
 
 import buf_writer "./buf_writer"
+import constants "./constants"
 import utils "./utils"
+import wl_compositor "wayland_protocol/wl_compositor"
+import wl_display "wayland_protocol/wl_display"
+import wl_registry "wayland_protocol/wl_registry"
+import wl_shm "wayland_protocol/wl_shm"
+import wl_shm_pool "wayland_protocol/wl_shm_pool"
+import wl_surface "wayland_protocol/wl_surface"
+import xdg_surface "wayland_protocol/xdg_surface"
+import xdg_toplevel "wayland_protocol/xdg_toplevel"
+import xdg_wm_base "wayland_protocol/xdg_wm_base"
 import "base:intrinsics"
 import "core:fmt"
 import "core:mem"
@@ -13,26 +23,6 @@ import "core:sys/posix"
 wayland_current_id: u32 = 1
 
 wayland_display_object_id: u32 : 1
-wayland_wl_registry_event_global: u16 : 0
-wayland_shm_pool_event_format: u16 : 0
-wayland_wl_buffer_event_release: u16 : 0
-wayland_xdg_wm_base_event_ping: u16 : 0
-wayland_xdg_toplevel_event_configure: u16 : 0
-wayland_xdg_toplevel_event_close: u16 : 1
-wayland_xdg_surface_event_configure: u16 : 0
-wayland_wl_display_get_registry_opcode: u16 : 1
-wayland_wl_registry_bind_opcode: u16 : 0
-wayland_wl_compositor_create_surface_opcode: u16 : 0
-wayland_xdg_wm_base_pong_opcode: u16 : 3
-wayland_xdg_surface_ack_configure_opcode: u16 : 4
-wayland_wl_shm_create_pool_opcode: u16 : 0
-wayland_xdg_wm_base_get_xdg_surface_opcode: u16 : 2
-wayland_wl_shm_pool_create_buffer_opcode: u16 : 0
-wayland_wl_surface_attach_opcode: u16 : 1
-wayland_xdg_surface_get_toplevel_opcode: u16 : 1
-wayland_wl_surface_commit_opcode: u16 : 6
-wayland_wl_display_error_event: u16 : 0
-wayland_format_xrgb8888: u32 : 1
 color_channels: u32 : 4
 
 state_state_t :: enum {
@@ -96,7 +86,6 @@ wayland_display_connect :: proc() -> linux.Fd {
 
 	mem.copy(&addr.sun_path[socket_path_length], raw_data(display_name[:]), len(display_name))
 
-	// fd := posix.socket(.UNIX, .STREAM, {})
 	fd, socket_err := linux.socket(.UNIX, .STREAM, {}, {})
 
 	if fd == -1 || socket_err != nil {
@@ -147,100 +136,34 @@ buf_read_n :: proc(buf: ^^u8, buf_size: ^int, dst: ^u8, n: int) {
 	buf_size^ -= n
 }
 
-wayland_wl_display_get_registry :: proc(fd: linux.Fd) -> u32 {
-	writer: buf_writer.Writer(128)
-	buf_writer.initialize(
-		&writer,
-		wayland_display_object_id,
-		wayland_wl_display_get_registry_opcode,
-	)
-
-	wayland_current_id += 1
-	buf_writer.write_u32(&writer, wayland_current_id)
-
-	send_err := buf_writer.send(&writer, fd)
-	if (send_err != nil) {
-		fmt.eprint(
-			"get_registry message failed to send to wl_display@%d",
-			wayland_display_object_id,
-		)
-		os.exit(int(send_err))
-	}
-
-	fmt.printfln(
-		"-> wl_display@%d.get_registry: wl_registry=%d",
-		wayland_display_object_id,
-		wayland_current_id,
-	)
-
-	return wayland_current_id
-}
-
-wayland_wl_registry_bind :: proc(
-	fd: linux.Fd,
+// registry_bind sends the full wl_registry.bind wire message including the
+// interface string and version, which are required for the untyped new_id arg.
+// The generated wl_registry.bind does not yet handle this special case.
+registry_bind :: proc(
+	socket: linux.Fd,
 	registry: u32,
 	name: u32,
 	interface: string,
 	version: u32,
 ) -> u32 {
-	writer: buf_writer.Writer(512)
-	buf_writer.initialize(&writer, registry, wayland_wl_registry_bind_opcode)
-
+	writer: buf_writer.Writer(constants.BUF_WRITER_SIZE_STRING)
+	buf_writer.initialize(&writer, registry, wl_registry.BIND_REQUEST_OPCODE)
 	buf_writer.write_u32(&writer, name)
 	buf_writer.write_string(&writer, interface)
 	buf_writer.write_u32(&writer, version)
-
 	wayland_current_id += 1
 	buf_writer.write_u32(&writer, wayland_current_id)
-
-	send_err := buf_writer.send(&writer, fd)
-	if (send_err != nil) {
-		fmt.eprintfln("bind message failed to send to wl_registry@%d", registry)
-		os.exit(int(send_err))
-	}
-
+	send_err := buf_writer.send(&writer, socket)
+	if send_err != nil do os.exit(int(send_err))
 	fmt.printfln(
-		"-> wl_registry@%d.bind: name=%d interface=%s version=%d",
+		"-> wl_registry@%v.bind: name=%v interface=%v version=%v id=%v",
 		registry,
 		name,
 		interface,
 		version,
-	)
-
-	return wayland_current_id
-
-}
-
-wayland_wl_compositor_create_surface :: proc(fd: linux.Fd, state: ^state_t) -> u32 {
-	assert(state.wl_compositor > 0)
-
-	writer: buf_writer.Writer(128)
-	buf_writer.initialize(
-		&writer,
-		state.wl_compositor,
-		wayland_wl_compositor_create_surface_opcode,
-	)
-
-	wayland_current_id += 1
-	buf_writer.write_u32(&writer, wayland_current_id)
-
-	send_err := buf_writer.send(&writer, fd)
-	if (send_err != nil) {
-		fmt.eprint(
-			"create_surface message failed to send to wl_compositor@%d",
-			state.wl_compositor,
-		)
-		os.exit(int(send_err))
-	}
-
-	fmt.printfln(
-		"-> wl_compositor@%d.create_surface: wl_surface=%d",
-		state.wl_compositor,
 		wayland_current_id,
 	)
-
 	return wayland_current_id
-
 }
 
 create_shared_memory_file :: proc(state: ^state_t) {
@@ -302,181 +225,6 @@ cleanup_shared_memory_file :: proc(state: ^state_t) {
 	state.shm_fd = 0
 }
 
-wayland_xdg_wm_base_pong :: proc(fd: linux.Fd, state: ^state_t, ping: u32) {
-	assert(state.xdg_wm_base > 0)
-	assert(state.wl_surface > 0)
-
-	writer: buf_writer.Writer(128)
-	buf_writer.initialize(&writer, state.xdg_wm_base, wayland_xdg_wm_base_pong_opcode)
-
-	buf_writer.write_u32(&writer, ping)
-
-	send_err := buf_writer.send(&writer, fd)
-	if (send_err != nil) {
-		fmt.eprint("pong message failed to send to xdg_wm_base@%d", state.xdg_wm_base)
-		os.exit(int(send_err))
-	}
-
-	fmt.printfln("-> xdg_wm_base@%d.pong: ping=%d", state.xdg_wm_base, ping)
-}
-
-wayland_xdg_surface_ack_configure :: proc(fd: linux.Fd, state: ^state_t, configure: u32) {
-	assert(state.xdg_surface > 0)
-
-	writer: buf_writer.Writer(128)
-	buf_writer.initialize(&writer, state.xdg_surface, wayland_xdg_surface_ack_configure_opcode)
-
-	buf_writer.write_u32(&writer, configure)
-
-	send_err := buf_writer.send(&writer, fd)
-	if (send_err != nil) {
-		fmt.eprint("ack_configure message failed to send to xdg_surface@%d", state.xdg_surface)
-		os.exit(int(send_err))
-	}
-
-	fmt.printfln("-> xdg_surface@%d.ack_configure: configure=%d", state.xdg_surface, configure)
-}
-
-wayland_wl_shm_create_pool :: proc(fd: linux.Fd, state: ^state_t) -> u32 {
-	assert(state.shm_pool_size > 0)
-
-	writer: buf_writer.Writer(128)
-	buf_writer.initialize(&writer, state.wl_shm, wayland_wl_shm_create_pool_opcode)
-
-	wayland_current_id += 1
-	buf_writer.write_u32(&writer, wayland_current_id)
-	buf_writer.write_u32(&writer, state.shm_pool_size)
-
-	send_err := buf_writer.send_with_fd(&writer, fd, state.shm_fd)
-	if send_err != nil {
-		fmt.eprintfln("create_pool message failed to send to wl_shm@%d", state.wl_shm)
-		os.exit(int(send_err))
-	}
-
-	fmt.printfln("-> wl_shm@%d.create_pool: wl_shm_pool=%d", state.wl_shm, wayland_current_id)
-
-	return wayland_current_id
-}
-
-wayland_wl_shm_pool_create_buffer :: proc(fd: linux.Fd, state: ^state_t) -> u32 {
-	assert(state.wl_shm_pool > 0)
-
-	writer: buf_writer.Writer(128)
-	buf_writer.initialize(&writer, state.wl_shm_pool, wayland_wl_shm_pool_create_buffer_opcode)
-
-	wayland_current_id += 1
-	buf_writer.write_u32(&writer, wayland_current_id)
-
-	offset: u32 = 0
-	buf_writer.write_u32(&writer, offset)
-	buf_writer.write_u32(&writer, state.w)
-	buf_writer.write_u32(&writer, state.h)
-	buf_writer.write_u32(&writer, state.stride)
-	buf_writer.write_u32(&writer, wayland_format_xrgb8888)
-
-	send_err := buf_writer.send(&writer, fd)
-	if (send_err != nil) {
-		fmt.eprint("create_buffer message failed to send to wl_shm_pool@%d", state.wl_shm_pool)
-		os.exit(int(send_err))
-	}
-
-	fmt.printfln(
-		"-> wl_shm_pool@%d.create_buffer: wl_buffer=%d",
-		state.wl_shm_pool,
-		wayland_current_id,
-	)
-
-	return wayland_current_id
-}
-
-wayland_xdg_wm_base_get_xdg_surface :: proc(fd: linux.Fd, state: ^state_t) -> u32 {
-	assert(state.xdg_wm_base > 0)
-	assert(state.wl_surface > 0)
-
-	writer: buf_writer.Writer(128)
-	buf_writer.initialize(&writer, state.xdg_wm_base, wayland_xdg_wm_base_get_xdg_surface_opcode)
-
-	wayland_current_id += 1
-	buf_writer.write_u32(&writer, wayland_current_id)
-	buf_writer.write_u32(&writer, state.wl_surface)
-
-	send_err := buf_writer.send(&writer, fd)
-	if (send_err != nil) {
-		fmt.eprint("get_xdg_surface message failed to send to xdg_wm_base@%d", wayland_current_id)
-		os.exit(int(send_err))
-	}
-
-	fmt.printfln(
-		"-> xdg_wm_base@%d.get_xdg_surface: xdg_surface=%d wl_surface=%d",
-		state.xdg_wm_base,
-		wayland_current_id,
-		state.wl_surface,
-	)
-
-	return wayland_current_id
-}
-
-wayland_wl_surface_attach :: proc(fd: linux.Fd, state: ^state_t) {
-	assert(state.wl_surface > 0)
-	assert(state.wl_buffer > 0)
-
-	writer: buf_writer.Writer(128)
-	buf_writer.initialize(&writer, state.wl_surface, wayland_wl_surface_attach_opcode)
-
-	buf_writer.write_u32(&writer, state.wl_buffer)
-
-	x, y: u32
-	buf_writer.write_u32(&writer, x)
-	buf_writer.write_u32(&writer, y)
-
-	send_err := buf_writer.send(&writer, fd)
-	if (send_err != nil) {
-		fmt.eprint("attach message failed to send to wl_buffer@%d", state.wl_buffer)
-		os.exit(int(send_err))
-	}
-
-	fmt.printfln("-> wl_surface@%d.attach: wl_buffer=%d", state.wl_surface, state.wl_buffer)
-}
-
-wayland_xdg_surface_get_toplevel :: proc(fd: linux.Fd, state: ^state_t) -> u32 {
-	assert(state.wl_surface > 0)
-
-	writer: buf_writer.Writer(128)
-	buf_writer.initialize(&writer, state.xdg_surface, wayland_xdg_surface_get_toplevel_opcode)
-
-	wayland_current_id += 1
-	buf_writer.write_u32(&writer, wayland_current_id)
-
-	send_err := buf_writer.send(&writer, fd)
-	if (send_err != nil) {
-		fmt.eprint("get_toplevel message failed to send to xdg_surface@%d", state.xdg_surface)
-		os.exit(int(send_err))
-	}
-
-	fmt.printfln(
-		"-> xdg_surface@%d.get_toplevel: xdg_toplevel=%d",
-		state.xdg_surface,
-		wayland_current_id,
-	)
-
-	return wayland_current_id
-}
-
-wayland_wl_surface_commit :: proc(fd: linux.Fd, state: ^state_t) {
-	assert(state.wl_surface > 0)
-
-	writer: buf_writer.Writer(128)
-	buf_writer.initialize(&writer, state.wl_surface, wayland_wl_surface_commit_opcode)
-
-	send_err := buf_writer.send(&writer, fd)
-	if (send_err != nil) {
-		fmt.eprint("commit message failed to send to wl_surface@%d", state.wl_surface)
-		os.exit(int(send_err))
-	}
-
-	fmt.printfln("-> wl_surface@%d.commit: ", state.wl_surface)
-}
-
 wayland_handle_message :: proc(fd: linux.Fd, state: ^state_t, msg: ^^u8, msg_len: ^int) {
 	assert(msg_len^ >= 8)
 
@@ -491,7 +239,7 @@ wayland_handle_message :: proc(fd: linux.Fd, state: ^state_t, msg: ^^u8, msg_len
 	header_size: u16 = size_of(object_id) + size_of(opcode) + size_of(announced_size)
 	assert(int(announced_size) <= int(header_size) + msg_len^)
 
-	if (object_id == state.wl_registry && opcode == wayland_wl_registry_event_global) {
+	if (object_id == state.wl_registry && opcode == wl_registry.GLOBAL_EVENT_OPCODE) {
 		name := buf_read_unsigned_int(msg, msg_len, u32)
 		interface_len := buf_read_unsigned_int(msg, msg_len, u32)
 		padded_interface_len := utils.roundup_4(int(interface_len))
@@ -514,35 +262,16 @@ wayland_handle_message :: proc(fd: linux.Fd, state: ^state_t, msg: ^^u8, msg_len
 		)
 
 		if interface == "wl_shm\000" {
-			state.wl_shm = wayland_wl_registry_bind(
-				fd,
-				state.wl_registry,
-				name,
-				interface,
-				version,
-			)
+			state.wl_shm = registry_bind(fd, state.wl_registry, name, interface, version)
 		} else if interface == "xdg_wm_base\000" {
-			state.xdg_wm_base = wayland_wl_registry_bind(
-				fd,
-				state.wl_registry,
-				name,
-				interface,
-				version,
-			)
+			state.xdg_wm_base = registry_bind(fd, state.wl_registry, name, interface, version)
 		} else if interface == "wl_compositor\000" {
-			state.wl_compositor = wayland_wl_registry_bind(
-				fd,
-				state.wl_registry,
-				name,
-				interface,
-				version,
-			)
-
+			state.wl_compositor = registry_bind(fd, state.wl_registry, name, interface, version)
 		}
 
 		return
 	} else if (object_id == wayland_display_object_id &&
-		   opcode == wayland_wl_display_error_event) {
+		   opcode == wl_display.ERROR_EVENT_OPCODE) {
 		target_obejct_id := buf_read_unsigned_int(msg, msg_len, u32)
 		code := buf_read_unsigned_int(msg, msg_len, u32)
 		error: [512]u8
@@ -557,19 +286,21 @@ wayland_handle_message :: proc(fd: linux.Fd, state: ^state_t, msg: ^^u8, msg_len
 			message,
 		)
 		os.exit(int(linux.Errno.EINVAL))
-	} else if object_id == state.wl_shm && opcode == wayland_shm_pool_event_format {
+	} else if object_id == state.wl_shm && opcode == wl_shm.FORMAT_EVENT_OPCODE {
 		format := buf_read_unsigned_int(msg, msg_len, u32)
 		fmt.printfln("<- wl_shm: format=%#x", format)
 
 		return
-	} else if (object_id == state.xdg_wm_base && opcode == wayland_xdg_wm_base_event_ping) {
+	} else if (object_id == state.xdg_wm_base && opcode == xdg_wm_base.PING_EVENT_OPCODE) {
 		ping := buf_read_unsigned_int(msg, msg_len, u32)
 
 		fmt.printfln("<- xdg_wm_base@%d.ping: ping=%d", state.xdg_wm_base, ping)
-		wayland_xdg_wm_base_pong(fd, state, ping)
+		err := xdg_wm_base.pong(fd, state.xdg_wm_base, ping)
+		if err != nil do os.exit(int(err))
 
 		return
-	} else if (object_id == state.xdg_toplevel && opcode == wayland_xdg_toplevel_event_configure) {
+	} else if (object_id == state.xdg_toplevel &&
+		   opcode == xdg_toplevel.CONFIGURE_EVENT_OPCODE) {
 		w, h, len: u32 =
 			buf_read_unsigned_int(msg, msg_len, u32),
 			buf_read_unsigned_int(msg, msg_len, u32),
@@ -587,15 +318,17 @@ wayland_handle_message :: proc(fd: linux.Fd, state: ^state_t, msg: ^^u8, msg_len
 		)
 
 		return
-	} else if (object_id == state.xdg_toplevel && opcode == wayland_xdg_toplevel_event_close) {
+	} else if (object_id == state.xdg_toplevel && opcode == xdg_toplevel.CLOSE_EVENT_OPCODE) {
 		running = false
 
 		fmt.printfln("<- xdg_toplevel@%d.close:", state.xdg_toplevel)
 		return
-	} else if (object_id == state.xdg_surface && opcode == wayland_xdg_surface_event_configure) {
+	} else if (object_id == state.xdg_surface &&
+		   opcode == xdg_surface.CONFIGURE_EVENT_OPCODE) {
 		configure := buf_read_unsigned_int(msg, msg_len, u32)
 		fmt.printf("<- xdg_surface@%d.configure: configure=%d\n", state.xdg_surface, configure)
-		wayland_xdg_surface_ack_configure(fd, state, configure)
+		err := xdg_surface.ack_configure(fd, state.xdg_surface, configure)
+		if err != nil do os.exit(int(err))
 		state.state = .STATE_SURFACE_ACKED_CONFIGURE
 
 		return
@@ -629,8 +362,11 @@ main :: proc() {
 
 	fd := wayland_display_connect()
 
+	wayland_current_id += 1
+	err := wl_display.get_registry(fd, wayland_display_object_id, wayland_current_id)
+	if err != nil do os.exit(int(err))
 	state: state_t = {
-		wl_registry = wayland_wl_display_get_registry(fd),
+		wl_registry = wayland_current_id,
 		w           = 117,
 		h           = 150,
 		stride      = 117 * color_channels,
@@ -663,10 +399,28 @@ main :: proc() {
 			   state.wl_surface == 0) {
 			assert(state.state == .STATE_NONE)
 
-			state.wl_surface = wayland_wl_compositor_create_surface(fd, &state)
-			state.xdg_surface = wayland_xdg_wm_base_get_xdg_surface(fd, &state)
-			state.xdg_toplevel = wayland_xdg_surface_get_toplevel(fd, &state)
-			wayland_wl_surface_commit(fd, &state)
+			wayland_current_id += 1
+			err = wl_compositor.create_surface(fd, state.wl_compositor, wayland_current_id)
+			if err != nil do os.exit(int(err))
+			state.wl_surface = wayland_current_id
+
+			wayland_current_id += 1
+			err = xdg_wm_base.get_xdg_surface(
+				fd,
+				state.xdg_wm_base,
+				wayland_current_id,
+				state.wl_surface,
+			)
+			if err != nil do os.exit(int(err))
+			state.xdg_surface = wayland_current_id
+
+			wayland_current_id += 1
+			err = xdg_surface.get_toplevel(fd, state.xdg_surface, wayland_current_id)
+			if err != nil do os.exit(int(err))
+			state.xdg_toplevel = wayland_current_id
+
+			err = wl_surface.commit(fd, state.wl_surface)
+			if err != nil do os.exit(int(err))
 		}
 
 		if (state.state == .STATE_SURFACE_ACKED_CONFIGURE) {
@@ -675,10 +429,31 @@ main :: proc() {
 			assert(state.xdg_toplevel != 0)
 
 			if (state.wl_shm_pool == 0) {
-				state.wl_shm_pool = wayland_wl_shm_create_pool(fd, &state)
+				wayland_current_id += 1
+				err = wl_shm.create_pool(
+					fd,
+					state.wl_shm,
+					wayland_current_id,
+					state.shm_fd,
+					i32(state.shm_pool_size),
+				)
+				if err != nil do os.exit(int(err))
+				state.wl_shm_pool = wayland_current_id
 			}
 			if (state.wl_buffer == 0) {
-				state.wl_buffer = wayland_wl_shm_pool_create_buffer(fd, &state)
+				wayland_current_id += 1
+				err = wl_shm_pool.create_buffer(
+					fd,
+					state.wl_shm_pool,
+					wayland_current_id,
+					0,
+					i32(state.w),
+					i32(state.h),
+					i32(state.stride),
+					wl_shm.Format.Xrgb8888,
+				)
+				if err != nil do os.exit(int(err))
+				state.wl_buffer = wayland_current_id
 			}
 
 			assert(state.shm_pool_data != nil)
@@ -701,8 +476,10 @@ main :: proc() {
 				pixels[i] = (u32(r) << 16) | (u32(g) << 8) | u32(b)
 			}
 
-			wayland_wl_surface_attach(fd, &state)
-			wayland_wl_surface_commit(fd, &state)
+			err = wl_surface.attach(fd, state.wl_surface, state.wl_buffer, 0, 0)
+			if err != nil do os.exit(int(err))
+			err = wl_surface.commit(fd, state.wl_surface)
+			if err != nil do os.exit(int(err))
 
 			state.state = .STATE_SURFACE_ATTACHED
 		}
