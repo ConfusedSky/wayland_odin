@@ -20,9 +20,6 @@ import xdg_surface "wayland_protocol/xdg_surface"
 import xdg_toplevel "wayland_protocol/xdg_toplevel"
 import xdg_wm_base "wayland_protocol/xdg_wm_base"
 
-
-wayland_current_id: u32 = 1
-
 wayland_display_object_id: u32 : 1
 color_channels: u32 : 4
 
@@ -33,23 +30,24 @@ state_state_t :: enum {
 }
 
 state_t :: struct {
-	socket_fd:     linux.Fd,
-	wl_registry:   u32,
-	wl_shm:        u32,
-	wl_shm_pool:   u32,
-	wl_buffer:     u32,
-	xdg_wm_base:   u32,
-	xdg_surface:   u32,
-	wl_compositor: u32,
-	wl_surface:    u32,
-	xdg_toplevel:  u32,
-	stride:        u32,
-	w:             u32,
-	h:             u32,
-	shm_pool_size: u32,
-	shm_fd:        linux.Fd,
-	shm_pool_data: ^u8,
-	state:         state_state_t,
+	socket_fd:          linux.Fd,
+	wl_registry:        u32,
+	wl_shm:             u32,
+	wl_shm_pool:        u32,
+	wl_buffer:          u32,
+	xdg_wm_base:        u32,
+	xdg_surface:        u32,
+	wl_compositor:      u32,
+	wl_surface:         u32,
+	xdg_toplevel:       u32,
+	stride:             u32,
+	w:                  u32,
+	h:                  u32,
+	shm_pool_size:      u32,
+	shm_fd:             linux.Fd,
+	shm_pool_data:      ^u8,
+	state:              state_state_t,
+	wayland_current_id: u32,
 }
 
 // Event handler callbacks
@@ -62,22 +60,34 @@ _on_wl_display_error :: proc(object_id: u32, code: u32, message: string, user_da
 _on_wl_registry_global :: proc(name: u32, interface: string, version: u32, user_data: rawptr) {
 	state := (^state_t)(user_data)
 	if interface == "wl_shm" {
-		state.wl_shm = registry_bind(state.socket_fd, state.wl_registry, name, interface, version)
+		state.wayland_current_id += 1
+		state.wl_shm = registry_bind(
+			state.socket_fd,
+			state.wl_registry,
+			name,
+			interface,
+			version,
+			state.wayland_current_id,
+		)
 	} else if interface == "xdg_wm_base" {
+		state.wayland_current_id += 1
 		state.xdg_wm_base = registry_bind(
 			state.socket_fd,
 			state.wl_registry,
 			name,
 			interface,
 			version,
+			state.wayland_current_id,
 		)
 	} else if interface == "wl_compositor" {
+		state.wayland_current_id += 1
 		state.wl_compositor = registry_bind(
 			state.socket_fd,
 			state.wl_registry,
 			name,
 			interface,
 			version,
+			state.wayland_current_id,
 		)
 	}
 }
@@ -119,7 +129,14 @@ xdg_surface_handlers := xdg_surface.EventHandlers {
 	on_configure = _on_xdg_surface_configure,
 }
 
-HandleEventProc :: proc(object_id: u32, opcode: u16, msg: ^^u8, msg_len: ^int, handlers_raw: rawptr, user_data: rawptr)
+HandleEventProc :: proc(
+	object_id: u32,
+	opcode: u16,
+	msg: ^^u8,
+	msg_len: ^int,
+	handlers_raw: rawptr,
+	user_data: rawptr,
+)
 
 RegisteredEventHandler :: struct {
 	handle_event:   HandleEventProc,
@@ -242,6 +259,7 @@ registry_bind :: proc(
 	name: u32,
 	interface: string,
 	version: u32,
+	new_id: u32,
 ) -> u32 {
 	writer: buf_writer.Writer(constants.BUF_WRITER_SIZE_STRING)
 	buf_writer.initialize(&writer, registry, wl_registry.BIND_REQUEST_OPCODE)
@@ -251,8 +269,7 @@ registry_bind :: proc(
 	defer delete(interface_wire)
 	buf_writer.write_string(&writer, interface_wire)
 	buf_writer.write_u32(&writer, version)
-	wayland_current_id += 1
-	buf_writer.write_u32(&writer, wayland_current_id)
+	buf_writer.write_u32(&writer, new_id)
 	send_err := buf_writer.send(&writer, socket)
 	if send_err != nil do os.exit(int(send_err))
 	fmt.printfln(
@@ -261,9 +278,9 @@ registry_bind :: proc(
 		name,
 		interface,
 		version,
-		wayland_current_id,
+		new_id,
 	)
-	return wayland_current_id
+	return new_id
 }
 
 create_shared_memory_file :: proc(state: ^state_t) {
@@ -329,7 +346,7 @@ wayland_handle_message :: proc(fd: linux.Fd, state: ^state_t, msg: ^^u8, msg_len
 	assert(msg_len^ >= 8)
 
 	object_id := buf_read_unsigned_int(msg, msg_len, u32)
-	assert(object_id <= wayland_current_id)
+	assert(object_id <= state.wayland_current_id)
 	opcode := buf_read_unsigned_int(msg, msg_len, u16)
 	announced_size := buf_read_unsigned_int(msg, msg_len, u16)
 
@@ -384,16 +401,18 @@ main :: proc() {
 
 	socket_fd := wayland_display_connect()
 
-	wayland_current_id += 1
-	err := wl_display.get_registry(socket_fd, wayland_display_object_id, wayland_current_id)
-	if err != nil do os.exit(int(err))
 	state: state_t = {
-		wl_registry = wayland_current_id,
-		w           = 117,
-		h           = 150,
-		stride      = 117 * color_channels,
-		socket_fd   = socket_fd,
+		wayland_current_id = 1,
 	}
+	state.wayland_current_id += 1
+	err := wl_display.get_registry(socket_fd, wayland_display_object_id, state.wayland_current_id)
+	if err != nil do os.exit(int(err))
+
+	state.wl_registry = state.wayland_current_id
+	state.w = 117
+	state.h = 150
+	state.stride = 117 * color_channels
+	state.socket_fd = socket_fd
 
 	state.shm_pool_size = state.h * state.stride
 	create_shared_memory_file(&state)
@@ -422,25 +441,29 @@ main :: proc() {
 			   state.wl_surface == 0) {
 			assert(state.state == .STATE_NONE)
 
-			wayland_current_id += 1
-			err = wl_compositor.create_surface(socket_fd, state.wl_compositor, wayland_current_id)
+			state.wayland_current_id += 1
+			err = wl_compositor.create_surface(
+				socket_fd,
+				state.wl_compositor,
+				state.wayland_current_id,
+			)
 			if err != nil do os.exit(int(err))
-			state.wl_surface = wayland_current_id
+			state.wl_surface = state.wayland_current_id
 
-			wayland_current_id += 1
+			state.wayland_current_id += 1
 			err = xdg_wm_base.get_xdg_surface(
 				socket_fd,
 				state.xdg_wm_base,
-				wayland_current_id,
+				state.wayland_current_id,
 				state.wl_surface,
 			)
 			if err != nil do os.exit(int(err))
-			state.xdg_surface = wayland_current_id
+			state.xdg_surface = state.wayland_current_id
 
-			wayland_current_id += 1
-			err = xdg_surface.get_toplevel(socket_fd, state.xdg_surface, wayland_current_id)
+			state.wayland_current_id += 1
+			err = xdg_surface.get_toplevel(socket_fd, state.xdg_surface, state.wayland_current_id)
 			if err != nil do os.exit(int(err))
-			state.xdg_toplevel = wayland_current_id
+			state.xdg_toplevel = state.wayland_current_id
 
 			err = wl_surface.commit(socket_fd, state.wl_surface)
 			if err != nil do os.exit(int(err))
@@ -452,23 +475,23 @@ main :: proc() {
 			assert(state.xdg_toplevel != 0)
 
 			if (state.wl_shm_pool == 0) {
-				wayland_current_id += 1
+				state.wayland_current_id += 1
 				err = wl_shm.create_pool(
 					socket_fd,
 					state.wl_shm,
-					wayland_current_id,
+					state.wayland_current_id,
 					state.shm_fd,
 					i32(state.shm_pool_size),
 				)
 				if err != nil do os.exit(int(err))
-				state.wl_shm_pool = wayland_current_id
+				state.wl_shm_pool = state.wayland_current_id
 			}
 			if (state.wl_buffer == 0) {
-				wayland_current_id += 1
+				state.wayland_current_id += 1
 				err = wl_shm_pool.create_buffer(
 					socket_fd,
 					state.wl_shm_pool,
-					wayland_current_id,
+					state.wayland_current_id,
 					0,
 					i32(state.w),
 					i32(state.h),
@@ -476,7 +499,7 @@ main :: proc() {
 					wl_shm.Format.Xrgb8888,
 				)
 				if err != nil do os.exit(int(err))
-				state.wl_buffer = wayland_current_id
+				state.wl_buffer = state.wayland_current_id
 			}
 
 			assert(state.shm_pool_data != nil)
