@@ -2,7 +2,6 @@ package Main
 
 import buf_writer "./buf_writer"
 import constants "./constants"
-import utils "./utils"
 import wl_compositor "wayland_protocol/wl_compositor"
 import wl_display "wayland_protocol/wl_display"
 import wl_registry "wayland_protocol/wl_registry"
@@ -16,6 +15,7 @@ import "base:intrinsics"
 import "core:fmt"
 import "core:mem"
 import "core:os"
+import "core:strings"
 import "core:sys/linux"
 import "core:sys/posix"
 
@@ -48,6 +48,64 @@ state_t :: struct {
 	shm_fd:        linux.Fd,
 	shm_pool_data: ^u8,
 	state:         state_state_t,
+}
+
+HandleContext :: struct {
+	fd:    linux.Fd,
+	state: ^state_t,
+}
+
+// Event handler callbacks
+
+_on_wl_display_error :: proc(object_id: u32, code: u32, message: string, user_data: rawptr) {
+	fmt.eprintfln("fatal error: target_object_id=%v code=%v error=%s", object_id, code, message)
+	os.exit(int(linux.Errno.EINVAL))
+}
+
+_on_wl_registry_global :: proc(name: u32, interface: string, version: u32, user_data: rawptr) {
+	ctx := (^HandleContext)(user_data)
+	if interface == "wl_shm" {
+		ctx.state.wl_shm = registry_bind(ctx.fd, ctx.state.wl_registry, name, interface, version)
+	} else if interface == "xdg_wm_base" {
+		ctx.state.xdg_wm_base = registry_bind(ctx.fd, ctx.state.wl_registry, name, interface, version)
+	} else if interface == "wl_compositor" {
+		ctx.state.wl_compositor = registry_bind(ctx.fd, ctx.state.wl_registry, name, interface, version)
+	}
+}
+
+_on_xdg_wm_base_ping :: proc(serial: u32, user_data: rawptr) {
+	ctx := (^HandleContext)(user_data)
+	err := xdg_wm_base.pong(ctx.fd, ctx.state.xdg_wm_base, serial)
+	if err != nil do os.exit(int(err))
+}
+
+_on_xdg_toplevel_close :: proc(user_data: rawptr) {
+	running = false
+}
+
+_on_xdg_surface_configure :: proc(serial: u32, user_data: rawptr) {
+	ctx := (^HandleContext)(user_data)
+	err := xdg_surface.ack_configure(ctx.fd, ctx.state.xdg_surface, serial)
+	if err != nil do os.exit(int(err))
+	ctx.state.state = .STATE_SURFACE_ACKED_CONFIGURE
+}
+
+// Per-interface event handler tables
+wl_display_handlers := wl_display.EventHandlers {
+	on_error = _on_wl_display_error,
+}
+wl_registry_handlers := wl_registry.EventHandlers {
+	on_global = _on_wl_registry_global,
+}
+wl_shm_handlers: wl_shm.EventHandlers
+xdg_wm_base_handlers := xdg_wm_base.EventHandlers {
+	on_ping = _on_xdg_wm_base_ping,
+}
+xdg_toplevel_handlers := xdg_toplevel.EventHandlers {
+	on_close = _on_xdg_toplevel_close,
+}
+xdg_surface_handlers := xdg_surface.EventHandlers {
+	on_configure = _on_xdg_surface_configure,
 }
 
 wayland_display_connect :: proc() -> linux.Fd {
@@ -128,17 +186,10 @@ buf_read_unsigned_int :: proc(
 	return res
 }
 
-buf_read_n :: proc(buf: ^^u8, buf_size: ^int, dst: ^u8, n: int) {
-	assert(buf_size^ >= n)
-
-	mem.copy(dst, buf^, n)
-	buf^ = mem.ptr_offset(buf^, n)
-	buf_size^ -= n
-}
-
 // registry_bind sends the full wl_registry.bind wire message including the
 // interface string and version, which are required for the untyped new_id arg.
 // The generated wl_registry.bind does not yet handle this special case.
+// interface must not include a null terminator; registry_bind appends one.
 registry_bind :: proc(
 	socket: linux.Fd,
 	registry: u32,
@@ -149,7 +200,10 @@ registry_bind :: proc(
 	writer: buf_writer.Writer(constants.BUF_WRITER_SIZE_STRING)
 	buf_writer.initialize(&writer, registry, wl_registry.BIND_REQUEST_OPCODE)
 	buf_writer.write_u32(&writer, name)
-	buf_writer.write_string(&writer, interface)
+	// Wayland strings include null terminator in the length field
+	interface_wire := strings.concatenate({interface, "\x00"})
+	defer delete(interface_wire)
+	buf_writer.write_string(&writer, interface_wire)
 	buf_writer.write_u32(&writer, version)
 	wayland_current_id += 1
 	buf_writer.write_u32(&writer, wayland_current_id)
@@ -228,123 +282,49 @@ cleanup_shared_memory_file :: proc(state: ^state_t) {
 wayland_handle_message :: proc(fd: linux.Fd, state: ^state_t, msg: ^^u8, msg_len: ^int) {
 	assert(msg_len^ >= 8)
 
-	object_id := buf_read_unsigned_int(msg, msg_len, u32)
+	object_id      := buf_read_unsigned_int(msg, msg_len, u32)
 	assert(object_id <= wayland_current_id)
-
-	opcode := buf_read_unsigned_int(msg, msg_len, u16)
-
+	opcode         := buf_read_unsigned_int(msg, msg_len, u16)
 	announced_size := buf_read_unsigned_int(msg, msg_len, u16)
-	assert(utils.roundup_4(announced_size) <= announced_size)
 
 	header_size: u16 = size_of(object_id) + size_of(opcode) + size_of(announced_size)
+	assert(announced_size % 4 == 0)
 	assert(int(announced_size) <= int(header_size) + msg_len^)
 
-	if (object_id == state.wl_registry && opcode == wl_registry.GLOBAL_EVENT_OPCODE) {
-		name := buf_read_unsigned_int(msg, msg_len, u32)
-		interface_len := buf_read_unsigned_int(msg, msg_len, u32)
-		padded_interface_len := utils.roundup_4(int(interface_len))
+	body_size           := int(announced_size) - int(header_size)
+	msg_len_before_body := msg_len^
 
-		interface_buf: [512]u8
-		assert(padded_interface_len <= utils.cstring_len(interface_buf))
+	ctx := HandleContext{fd = fd, state = state}
 
-		buf_read_n(msg, msg_len, &interface_buf[0], padded_interface_len)
-		assert(interface_buf[interface_len - 1] == 0)
-
-		interface := string(interface_buf[:interface_len]) // -1 to strip null terminator
-		version := buf_read_unsigned_int(msg, msg_len, u32)
-
-		fmt.printfln(
-			"<- wl_registry@%d.global: name=%d interface=%s version=%d",
-			state.wl_registry,
-			name,
-			interface,
-			version,
-		)
-
-		if interface == "wl_shm\000" {
-			state.wl_shm = registry_bind(fd, state.wl_registry, name, interface, version)
-		} else if interface == "xdg_wm_base\000" {
-			state.xdg_wm_base = registry_bind(fd, state.wl_registry, name, interface, version)
-		} else if interface == "wl_compositor\000" {
-			state.wl_compositor = registry_bind(fd, state.wl_registry, name, interface, version)
-		}
-
-		return
-	} else if (object_id == wayland_display_object_id &&
-		   opcode == wl_display.ERROR_EVENT_OPCODE) {
-		target_obejct_id := buf_read_unsigned_int(msg, msg_len, u32)
-		code := buf_read_unsigned_int(msg, msg_len, u32)
-		error: [512]u8
-		error_len := buf_read_unsigned_int(msg, msg_len, u32)
-		buf_read_n(msg, msg_len, &error[0], utils.roundup_4(int(error_len)))
-		message := string(error[:error_len - 1]) // -1 to strip null terminator
-
+	if object_id == wayland_display_object_id {
+		wl_display.handle_event(object_id, opcode, msg, msg_len, &wl_display_handlers, &ctx)
+	} else if object_id == state.wl_registry {
+		wl_registry.handle_event(object_id, opcode, msg, msg_len, &wl_registry_handlers, &ctx)
+	} else if object_id == state.wl_shm {
+		wl_shm.handle_event(object_id, opcode, msg, msg_len, &wl_shm_handlers, &ctx)
+	} else if object_id == state.xdg_wm_base {
+		xdg_wm_base.handle_event(object_id, opcode, msg, msg_len, &xdg_wm_base_handlers, &ctx)
+	} else if object_id == state.xdg_toplevel {
+		xdg_toplevel.handle_event(object_id, opcode, msg, msg_len, &xdg_toplevel_handlers, &ctx)
+	} else if object_id == state.xdg_surface {
+		xdg_surface.handle_event(object_id, opcode, msg, msg_len, &xdg_surface_handlers, &ctx)
+	} else {
 		fmt.eprintfln(
-			"fatal error: target_object_id=%d code=%d error=%s",
-			target_obejct_id,
-			code,
-			message,
+			"unknown event: object_id=%d opcode=%d size=%d state=%v, skipping...",
+			object_id,
+			opcode,
+			announced_size,
+			state,
 		)
-		os.exit(int(linux.Errno.EINVAL))
-	} else if object_id == state.wl_shm && opcode == wl_shm.FORMAT_EVENT_OPCODE {
-		format := buf_read_unsigned_int(msg, msg_len, u32)
-		fmt.printfln("<- wl_shm: format=%#x", format)
-
-		return
-	} else if (object_id == state.xdg_wm_base && opcode == xdg_wm_base.PING_EVENT_OPCODE) {
-		ping := buf_read_unsigned_int(msg, msg_len, u32)
-
-		fmt.printfln("<- xdg_wm_base@%d.ping: ping=%d", state.xdg_wm_base, ping)
-		err := xdg_wm_base.pong(fd, state.xdg_wm_base, ping)
-		if err != nil do os.exit(int(err))
-
-		return
-	} else if (object_id == state.xdg_toplevel &&
-		   opcode == xdg_toplevel.CONFIGURE_EVENT_OPCODE) {
-		w, h, len: u32 =
-			buf_read_unsigned_int(msg, msg_len, u32),
-			buf_read_unsigned_int(msg, msg_len, u32),
-			buf_read_unsigned_int(msg, msg_len, u32)
-		buf: [256]u8
-		assert(len < size_of(buf))
-		buf_read_n(msg, msg_len, &buf[0], int(len))
-
-		fmt.printfln(
-			"<- xdg_toplevel@%d.configure: w=%d h=%d states[%d]",
-			state.xdg_toplevel,
-			w,
-			h,
-			len,
-		)
-
-		return
-	} else if (object_id == state.xdg_toplevel && opcode == xdg_toplevel.CLOSE_EVENT_OPCODE) {
-		running = false
-
-		fmt.printfln("<- xdg_toplevel@%d.close:", state.xdg_toplevel)
-		return
-	} else if (object_id == state.xdg_surface &&
-		   opcode == xdg_surface.CONFIGURE_EVENT_OPCODE) {
-		configure := buf_read_unsigned_int(msg, msg_len, u32)
-		fmt.printf("<- xdg_surface@%d.configure: configure=%d\n", state.xdg_surface, configure)
-		err := xdg_surface.ack_configure(fd, state.xdg_surface, configure)
-		if err != nil do os.exit(int(err))
-		state.state = .STATE_SURFACE_ACKED_CONFIGURE
-
-		return
 	}
 
-	fmt.eprintfln(
-		"unknown event: object_id=%d opcode=%d size=%d state=%v, skipping...",
-		object_id,
-		opcode,
-		announced_size,
-		state,
-	)
-
-	remaining := announced_size - header_size
-	msg^ = mem.ptr_offset(msg^, remaining)
-	msg_len^ -= int(remaining)
+	// Skip any remaining bytes in this message (unknown opcodes or unknown objects)
+	bytes_consumed := msg_len_before_body - msg_len^
+	if bytes_consumed < body_size {
+		to_skip := body_size - bytes_consumed
+		msg^ = mem.ptr_offset(msg^, to_skip)
+		msg_len^ -= to_skip
+	}
 }
 
 running := true
