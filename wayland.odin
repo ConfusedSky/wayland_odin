@@ -33,6 +33,7 @@ state_state_t :: enum {
 }
 
 state_t :: struct {
+	socket_fd:     linux.Fd,
 	wl_registry:   u32,
 	wl_shm:        u32,
 	wl_shm_pool:   u32,
@@ -51,11 +52,6 @@ state_t :: struct {
 	state:         state_state_t,
 }
 
-HandleContext :: struct {
-	fd:    linux.Fd,
-	state: ^state_t,
-}
-
 // Event handler callbacks
 
 _on_wl_display_error :: proc(object_id: u32, code: u32, message: string, user_data: rawptr) {
@@ -64,21 +60,21 @@ _on_wl_display_error :: proc(object_id: u32, code: u32, message: string, user_da
 }
 
 _on_wl_registry_global :: proc(name: u32, interface: string, version: u32, user_data: rawptr) {
-	ctx := (^HandleContext)(user_data)
+	state := (^state_t)(user_data)
 	if interface == "wl_shm" {
-		ctx.state.wl_shm = registry_bind(ctx.fd, ctx.state.wl_registry, name, interface, version)
+		state.wl_shm = registry_bind(state.socket_fd, state.wl_registry, name, interface, version)
 	} else if interface == "xdg_wm_base" {
-		ctx.state.xdg_wm_base = registry_bind(
-			ctx.fd,
-			ctx.state.wl_registry,
+		state.xdg_wm_base = registry_bind(
+			state.socket_fd,
+			state.wl_registry,
 			name,
 			interface,
 			version,
 		)
 	} else if interface == "wl_compositor" {
-		ctx.state.wl_compositor = registry_bind(
-			ctx.fd,
-			ctx.state.wl_registry,
+		state.wl_compositor = registry_bind(
+			state.socket_fd,
+			state.wl_registry,
 			name,
 			interface,
 			version,
@@ -87,8 +83,8 @@ _on_wl_registry_global :: proc(name: u32, interface: string, version: u32, user_
 }
 
 _on_xdg_wm_base_ping :: proc(serial: u32, user_data: rawptr) {
-	ctx := (^HandleContext)(user_data)
-	err := xdg_wm_base.pong(ctx.fd, ctx.state.xdg_wm_base, serial)
+	state := (^state_t)(user_data)
+	err := xdg_wm_base.pong(state.socket_fd, state.xdg_wm_base, serial)
 	if err != nil do os.exit(int(err))
 }
 
@@ -97,10 +93,10 @@ _on_xdg_toplevel_close :: proc(user_data: rawptr) {
 }
 
 _on_xdg_surface_configure :: proc(serial: u32, user_data: rawptr) {
-	ctx := (^HandleContext)(user_data)
-	err := xdg_surface.ack_configure(ctx.fd, ctx.state.xdg_surface, serial)
+	state := (^state_t)(user_data)
+	err := xdg_surface.ack_configure(state.socket_fd, state.xdg_surface, serial)
 	if err != nil do os.exit(int(err))
-	ctx.state.state = .STATE_SURFACE_ACKED_CONFIGURE
+	state.state = .STATE_SURFACE_ACKED_CONFIGURE
 }
 
 // Per-interface event handler tables
@@ -309,27 +305,22 @@ wayland_handle_message :: proc(fd: linux.Fd, state: ^state_t, msg: ^^u8, msg_len
 	body_size := int(announced_size) - int(header_size)
 	msg_len_before_body := msg_len^
 
-	ctx := HandleContext {
-		fd    = fd,
-		state = state,
-	}
-
 	if object_id == state.wl_buffer {
-		wl_buffer.handle_event(object_id, opcode, msg, msg_len, &wl_buffer_handlers, &ctx)
+		wl_buffer.handle_event(object_id, opcode, msg, msg_len, &wl_buffer_handlers, state)
 	} else if object_id == wayland_display_object_id {
-		wl_display.handle_event(object_id, opcode, msg, msg_len, &wl_display_handlers, &ctx)
+		wl_display.handle_event(object_id, opcode, msg, msg_len, &wl_display_handlers, state)
 	} else if object_id == state.wl_registry {
-		wl_registry.handle_event(object_id, opcode, msg, msg_len, &wl_registry_handlers, &ctx)
+		wl_registry.handle_event(object_id, opcode, msg, msg_len, &wl_registry_handlers, state)
 	} else if object_id == state.wl_surface {
-		wl_surface.handle_event(object_id, opcode, msg, msg_len, &wl_surface_handlers, &ctx)
+		wl_surface.handle_event(object_id, opcode, msg, msg_len, &wl_surface_handlers, state)
 	} else if object_id == state.wl_shm {
-		wl_shm.handle_event(object_id, opcode, msg, msg_len, &wl_shm_handlers, &ctx)
+		wl_shm.handle_event(object_id, opcode, msg, msg_len, &wl_shm_handlers, state)
 	} else if object_id == state.xdg_wm_base {
-		xdg_wm_base.handle_event(object_id, opcode, msg, msg_len, &xdg_wm_base_handlers, &ctx)
+		xdg_wm_base.handle_event(object_id, opcode, msg, msg_len, &xdg_wm_base_handlers, state)
 	} else if object_id == state.xdg_toplevel {
-		xdg_toplevel.handle_event(object_id, opcode, msg, msg_len, &xdg_toplevel_handlers, &ctx)
+		xdg_toplevel.handle_event(object_id, opcode, msg, msg_len, &xdg_toplevel_handlers, state)
 	} else if object_id == state.xdg_surface {
-		xdg_surface.handle_event(object_id, opcode, msg, msg_len, &xdg_surface_handlers, &ctx)
+		xdg_surface.handle_event(object_id, opcode, msg, msg_len, &xdg_surface_handlers, state)
 	} else {
 		fmt.eprintfln(
 			"unknown event: object_id=%d opcode=%d size=%d state=%v, skipping...",
@@ -362,16 +353,17 @@ main :: proc() {
 	posix.signal(.SIGTERM, handle_signal)
 	posix.signal(.SIGINT, handle_signal)
 
-	fd := wayland_display_connect()
+	socket_fd := wayland_display_connect()
 
 	wayland_current_id += 1
-	err := wl_display.get_registry(fd, wayland_display_object_id, wayland_current_id)
+	err := wl_display.get_registry(socket_fd, wayland_display_object_id, wayland_current_id)
 	if err != nil do os.exit(int(err))
 	state: state_t = {
 		wl_registry = wayland_current_id,
 		w           = 117,
 		h           = 150,
 		stride      = 117 * color_channels,
+		socket_fd   = socket_fd,
 	}
 
 	state.shm_pool_size = state.h * state.stride
@@ -379,7 +371,7 @@ main :: proc() {
 
 	for running {
 		read_buf: [4096]u8
-		read_bytes, recv_error := linux.recv(fd, read_buf[:], {})
+		read_bytes, recv_error := linux.recv(socket_fd, read_buf[:], {})
 
 		if read_bytes == -1 || recv_error != nil {
 			fmt.eprintln("Failed to receive new events")
@@ -392,7 +384,7 @@ main :: proc() {
 		msg_len := int(read_bytes)
 
 		for msg_len > 0 {
-			wayland_handle_message(fd, &state, &msg, &msg_len)
+			wayland_handle_message(socket_fd, &state, &msg, &msg_len)
 		}
 
 		if (state.wl_compositor != 0 &&
@@ -402,13 +394,13 @@ main :: proc() {
 			assert(state.state == .STATE_NONE)
 
 			wayland_current_id += 1
-			err = wl_compositor.create_surface(fd, state.wl_compositor, wayland_current_id)
+			err = wl_compositor.create_surface(socket_fd, state.wl_compositor, wayland_current_id)
 			if err != nil do os.exit(int(err))
 			state.wl_surface = wayland_current_id
 
 			wayland_current_id += 1
 			err = xdg_wm_base.get_xdg_surface(
-				fd,
+				socket_fd,
 				state.xdg_wm_base,
 				wayland_current_id,
 				state.wl_surface,
@@ -417,11 +409,11 @@ main :: proc() {
 			state.xdg_surface = wayland_current_id
 
 			wayland_current_id += 1
-			err = xdg_surface.get_toplevel(fd, state.xdg_surface, wayland_current_id)
+			err = xdg_surface.get_toplevel(socket_fd, state.xdg_surface, wayland_current_id)
 			if err != nil do os.exit(int(err))
 			state.xdg_toplevel = wayland_current_id
 
-			err = wl_surface.commit(fd, state.wl_surface)
+			err = wl_surface.commit(socket_fd, state.wl_surface)
 			if err != nil do os.exit(int(err))
 		}
 
@@ -433,7 +425,7 @@ main :: proc() {
 			if (state.wl_shm_pool == 0) {
 				wayland_current_id += 1
 				err = wl_shm.create_pool(
-					fd,
+					socket_fd,
 					state.wl_shm,
 					wayland_current_id,
 					state.shm_fd,
@@ -445,7 +437,7 @@ main :: proc() {
 			if (state.wl_buffer == 0) {
 				wayland_current_id += 1
 				err = wl_shm_pool.create_buffer(
-					fd,
+					socket_fd,
 					state.wl_shm_pool,
 					wayland_current_id,
 					0,
@@ -478,9 +470,9 @@ main :: proc() {
 				pixels[i] = (u32(r) << 16) | (u32(g) << 8) | u32(b)
 			}
 
-			err = wl_surface.attach(fd, state.wl_surface, state.wl_buffer, 0, 0)
+			err = wl_surface.attach(socket_fd, state.wl_surface, state.wl_buffer, 0, 0)
 			if err != nil do os.exit(int(err))
-			err = wl_surface.commit(fd, state.wl_surface)
+			err = wl_surface.commit(socket_fd, state.wl_surface)
 			if err != nil do os.exit(int(err))
 
 			state.state = .STATE_SURFACE_ATTACHED
@@ -489,5 +481,5 @@ main :: proc() {
 
 	fmt.println("Got termination signal. Terminating...")
 	cleanup_shared_memory_file(&state)
-	wayland_display_connection_cleanup(fd)
+	wayland_display_connection_cleanup(socket_fd)
 }
