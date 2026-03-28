@@ -9,7 +9,6 @@ import "core:os"
 import "core:strings"
 import "core:sys/linux"
 import "core:sys/posix"
-import "core:time"
 import wl_buffer "wayland_protocol/wl_buffer"
 import wl_compositor "wayland_protocol/wl_compositor"
 import wl_display "wayland_protocol/wl_display"
@@ -227,6 +226,9 @@ xdg_toplevel_handlers := xdg_toplevel.EventHandlers {
 	on_close = _on_xdg_toplevel_close,
 	on_configure = proc(width: i32, height: i32, states: []u8, user_data: rawptr) {
 		state := (^state_t)(user_data)
+		if width < 50 || height < 50 {
+			return
+		}
 		state.w = u32(width)
 		state.h = u32(height)
 	},
@@ -445,10 +447,9 @@ cleanup_shared_memory_file :: proc(state: ^state_t) {
 
 wayland_handle_messages :: proc(state: ^state_t) {
 	read_buf: [4096]u8
-	read_bytes, recv_error := linux.recv(state.socket_fd, read_buf[:], {.DONTWAIT})
+	read_bytes, recv_error := linux.recv(state.socket_fd, read_buf[:], {})
 
-	if recv_error == linux.Errno.EAGAIN {
-		time.sleep(time.Millisecond * 10)
+	if recv_error == .EINTR {
 		return
 	} else if read_bytes == -1 || recv_error != nil {
 		fmt.eprintln("Failed to receive new events")
@@ -604,6 +605,13 @@ draw_next_frame :: proc(state: ^state_t) {
 	assert(state.buffer_ready)
 
 	fmt.printfln("Drawing next frame")
+
+	if state.w < 10 || state.h < 10 {
+		state.state = .STATE_SURFACE_ATTACHED
+		fmt.eprintfln("State is to small to safely draw the next frame")
+		return
+	}
+
 	pixels := ([^]u32)(state.shm_pool_data)
 	x_block := state.w / 10
 	y_block := state.h / 10
@@ -628,8 +636,8 @@ draw_next_frame :: proc(state: ^state_t) {
 		state.wl_surface,
 		0,
 		0,
-		i32(state.max_w),
-		i32(state.max_h),
+		i32(state.w),
+		i32(state.h),
 	)
 	if err != nil do os.exit(int(err))
 	err = wl_surface.commit(state.socket_fd, state.wl_surface)
@@ -657,8 +665,11 @@ set_dimensions :: proc(state: ^state_t, w: u32, h: u32) {
 }
 
 main :: proc() {
-	posix.signal(.SIGTERM, handle_signal)
-	posix.signal(.SIGINT, handle_signal)
+	sa := posix.sigaction_t {
+		sa_handler = handle_signal,
+	}
+	posix.sigaction(.SIGINT, &sa, nil)
+	posix.sigaction(.SIGTERM, &sa, nil)
 
 	socket_fd := wayland_display_connect()
 
