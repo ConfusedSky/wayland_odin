@@ -61,6 +61,8 @@ state_t :: struct {
 	max_w:              u32,
 	h:                  u32,
 	max_h:              u32,
+	buf_w:              u32,
+	buf_h:              u32,
 	shm_pool_size:      u32,
 	shm_fd:             linux.Fd,
 	shm_pool_data:      ^u8,
@@ -176,9 +178,19 @@ _on_xdg_surface_configure :: proc(_: u32, serial: u32, user_data: rawptr) {
 
 // Per-interface event handler tables
 wl_buffer_handlers := wl_buffer.EventHandlers {
-	on_release = proc(_: u32, user_data: rawptr) {
+	on_release = proc(source_object_id: u32, user_data: rawptr) {
 		state := (^state_t)(user_data)
-		state.buffer_ready = true
+		if source_object_id == state.wl_buffer {
+			state.buffer_ready = true
+		} else {
+			// Old buffer destroyed while in flight — safe to clean up its handler now
+			for handler, i in state.event_handlers {
+				if handler.object_id == source_object_id {
+					ordered_remove(&state.event_handlers, i)
+					break
+				}
+			}
+		}
 	},
 }
 wl_display_handlers := wl_display.EventHandlers {
@@ -606,20 +618,6 @@ initialize_surface :: proc(state: ^state_t) {
 	)
 	if err != nil do os.exit(int(err))
 	state.wl_shm_pool = state.wayland_current_id
-	state.wayland_current_id += 1
-	err = wl_shm_pool.create_buffer(
-		state.socket_fd,
-		state.wl_shm_pool,
-		state.wayland_current_id,
-		0,
-		i32(state.max_w),
-		i32(state.max_h),
-		i32(state.max_stride),
-		wl_shm.Format.Xrgb8888,
-	)
-	if err != nil do os.exit(int(err))
-	state.wl_buffer = state.wayland_current_id
-	register_event_handler(state, state.wl_buffer, &wl_buffer_handlers, wl_buffer.handle_event)
 	state.buffer_ready = true
 }
 
@@ -632,6 +630,30 @@ draw_next_frame :: proc(state: ^state_t) {
 	assert(state.buffer_ready)
 
 	fmt.printfln("Drawing next frame")
+
+	if state.w != state.buf_w || state.h != state.buf_h {
+		if state.wl_buffer != 0 {
+			err := wl_buffer.destroy(state.socket_fd, state.wl_buffer)
+			if err != nil do os.exit(int(err))
+			// Keep the handler registered until the compositor sends on_release
+		}
+		state.wayland_current_id += 1
+		err := wl_shm_pool.create_buffer(
+			state.socket_fd,
+			state.wl_shm_pool,
+			state.wayland_current_id,
+			0,
+			i32(state.w),
+			i32(state.h),
+			i32(state.w * color_channels),
+			wl_shm.Format.Xrgb8888,
+		)
+		if err != nil do os.exit(int(err))
+		state.wl_buffer = state.wayland_current_id
+		state.buf_w = state.w
+		state.buf_h = state.h
+		register_event_handler(state, state.wl_buffer, &wl_buffer_handlers, wl_buffer.handle_event)
+	}
 
 	if state.w < 10 || state.h < 10 {
 		state.state = .STATE_SURFACE_ATTACHED
@@ -648,7 +670,7 @@ draw_next_frame :: proc(state: ^state_t) {
 			r = u8((x_prime + y_prime) % 2) * 255
 			g = u8((x_prime + y_prime) % 2) * 255
 			b = u8((x_prime + y_prime) % 2) * 255
-			pixels[y * state.max_w + x] = (u32(r) << 16) | (u32(g) << 8) | u32(b)
+			pixels[y * state.w + x] = (u32(r) << 16) | (u32(g) << 8) | u32(b)
 		}
 	}
 
@@ -728,7 +750,6 @@ main :: proc() {
 		}
 
 		if (state.wl_shm_pool > 0 &&
-			   state.wl_buffer > 0 &&
 			   state.w > 0 &&
 			   state.h > 0 &&
 			   state.buffer_ready &&
