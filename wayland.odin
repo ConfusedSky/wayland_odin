@@ -282,9 +282,9 @@ register_event_handler :: proc(
 		&state.event_handlers,
 		RegisteredEventHandler {
 			event_handlers = event_handlers,
-			object_id      = object_id,
-			handle_event   = handle_event,
-			user_data      = user_data if user_data != nil else state,
+			object_id = object_id,
+			handle_event = handle_event,
+			user_data = user_data if user_data != nil else state,
 		},
 	)
 }
@@ -640,17 +640,14 @@ draw_next_frame :: proc(state: ^state_t) {
 	}
 
 	pixels := ([^]u32)(state.shm_pool_data)
-	x_block := state.w / 10
-	y_block := state.h / 10
 	for y: u32 = 0; y < state.h; y += 1 {
 		for x: u32 = 0; x < state.w; x += 1 {
 			r, g, b: u8
-			// if (x > border_size && u32(x) < state.w - border_size) &&
-			//    (y > border_size && u32(y) < state.h - border_size) {
-			r = u8(((x / x_block) + (y / y_block)) % 2) * 255
-			g = u8(((x / x_block) + (y / y_block)) % 2) * 255
-			b = u8(((x / x_block) + (y / y_block)) % 2) * 255
-			//}
+			x_prime := x * 10 / state.w
+			y_prime := y * 10 / state.h
+			r = u8((x_prime + y_prime) % 2) * 255
+			g = u8((x_prime + y_prime) % 2) * 255
+			b = u8((x_prime + y_prime) % 2) * 255
 			pixels[y * state.max_w + x] = (u32(r) << 16) | (u32(g) << 8) | u32(b)
 		}
 	}
