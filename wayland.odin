@@ -25,22 +25,14 @@ running := true
 
 wayland_display_object_id: u32 : 1
 color_channels: u32 : 4
+MAX_OUTPUTS :: 8
 
 Output :: struct {
 	object_id: u32,
 	is_done:   bool,
 	w:         u32,
 	h:         u32,
-}
-
-get_output :: proc(state: ^state_t, object_id: u32) -> ^Output {
-	this_output: ^Output
-	for &output in state.wl_output {
-		if output.object_id == object_id {
-			this_output = &output
-		}
-	}
-	return this_output
+	user_data: OutputUserData,
 }
 
 state_state_t :: enum {
@@ -60,7 +52,8 @@ state_t :: struct {
 	xdg_surface:        u32,
 	wl_compositor:      u32,
 	wl_surface:         u32,
-	wl_output:          [dynamic]Output,
+	wl_output:          [MAX_OUTPUTS]Output,
+	wl_output_count:    int,
 	xdg_toplevel:       u32,
 	stride:             u32,
 	max_stride:         u32,
@@ -121,12 +114,19 @@ _on_wl_registry_global :: proc(
 			),
 			is_done   = false,
 		}
-		append(&state.wl_output, output)
+		assert(state.wl_output_count < MAX_OUTPUTS)
+		state.wl_output[state.wl_output_count] = output
+		state.wl_output[state.wl_output_count].user_data = OutputUserData {
+			state  = state,
+			output = &state.wl_output[state.wl_output_count],
+		}
+		state.wl_output_count += 1
 		register_event_handler(
 			state,
 			output.object_id,
 			&wl_output_handlers,
 			wl_output.handle_event,
+			&state.wl_output[state.wl_output_count - 1].user_data,
 		)
 	} else if interface == "xdg_wm_base" {
 		state.wayland_current_id += 1
@@ -184,6 +184,12 @@ wl_buffer_handlers := wl_buffer.EventHandlers {
 wl_display_handlers := wl_display.EventHandlers {
 	on_error = _on_wl_display_error,
 }
+
+OutputUserData :: struct {
+	output: ^Output,
+	state:  ^state_t,
+}
+
 wl_output_handlers := wl_output.EventHandlers {
 	on_mode = proc(
 		source_object_id: u32,
@@ -193,23 +199,21 @@ wl_output_handlers := wl_output.EventHandlers {
 		refresh: i32,
 		user_data: rawptr,
 	) {
-		state := (^state_t)(user_data)
+		data := (^OutputUserData)(user_data)
 		if .Current in flags {
-			this_output := get_output(state, source_object_id)
-			assert(this_output != nil)
-			this_output.w = u32(width)
-			this_output.h = u32(height)
+			assert(data.output != nil)
+			data.output.w = u32(width)
+			data.output.h = u32(height)
 		}
 	},
 	on_done = proc(source_object_id: u32, user_data: rawptr) {
-		state := (^state_t)(user_data)
-		this_output := get_output(state, source_object_id)
-		assert(this_output != nil)
-		this_output.is_done = true
+		data := (^OutputUserData)(user_data)
+		assert(data.output != nil)
+		data.output.is_done = true
 
 		all_done := true
 		max_w, max_h: u32
-		for &output in state.wl_output {
+		for &output in data.state.wl_output[:data.state.wl_output_count] {
 			if !output.is_done {
 				all_done = false
 				break
@@ -220,10 +224,10 @@ wl_output_handlers := wl_output.EventHandlers {
 		}
 
 		if all_done {
-			state.max_w = max_w
-			state.max_h = max_h
-			state.max_stride = state.max_w * color_channels
-			state.shm_pool_size = state.max_h * state.max_stride
+			data.state.max_w = max_w
+			data.state.max_h = max_h
+			data.state.max_stride = data.state.max_w * color_channels
+			data.state.shm_pool_size = data.state.max_h * data.state.max_stride
 		}
 	},
 }
@@ -264,6 +268,7 @@ RegisteredEventHandler :: struct {
 	event_handlers: rawptr,
 	handle_event:   HandleEventProc,
 	object_id:      u32,
+	user_data:      rawptr,
 }
 
 register_event_handler :: proc(
@@ -271,13 +276,15 @@ register_event_handler :: proc(
 	object_id: u32,
 	event_handlers: rawptr,
 	handle_event: HandleEventProc,
+	user_data: rawptr = nil,
 ) {
 	append(
 		&state.event_handlers,
 		RegisteredEventHandler {
 			event_handlers = event_handlers,
-			object_id = object_id,
-			handle_event = handle_event,
+			object_id      = object_id,
+			handle_event   = handle_event,
+			user_data      = user_data if user_data != nil else state,
 		},
 	)
 }
@@ -500,7 +507,14 @@ wayland_handle_message :: proc(state: ^state_t, msg: ^^u8, msg_len: ^int) {
 	for handler in state.event_handlers {
 		if object_id == handler.object_id {
 			object_found = true
-			handler.handle_event(object_id, opcode, msg, msg_len, handler.event_handlers, state)
+			handler.handle_event(
+				object_id,
+				opcode,
+				msg,
+				msg_len,
+				handler.event_handlers,
+				handler.user_data,
+			)
 			break
 		}
 	}
