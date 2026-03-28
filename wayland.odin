@@ -13,6 +13,7 @@ import "core:time"
 import wl_buffer "wayland_protocol/wl_buffer"
 import wl_compositor "wayland_protocol/wl_compositor"
 import wl_display "wayland_protocol/wl_display"
+import wl_output "wayland_protocol/wl_output"
 import wl_registry "wayland_protocol/wl_registry"
 import wl_shm "wayland_protocol/wl_shm"
 import wl_shm_pool "wayland_protocol/wl_shm_pool"
@@ -26,6 +27,23 @@ running := true
 wayland_display_object_id: u32 : 1
 color_channels: u32 : 4
 
+Output :: struct {
+	object_id: u32,
+	is_done:   bool,
+	w:         u32,
+	h:         u32,
+}
+
+get_output :: proc(state: ^state_t, object_id: u32) -> ^Output {
+	this_output: ^Output
+	for &output in state.wl_output {
+		if output.object_id == object_id {
+			this_output = &output
+		}
+	}
+	return this_output
+}
+
 state_state_t :: enum {
 	STATE_NONE,
 	STATE_SURFACE_ACKED_CONFIGURE,
@@ -38,12 +56,15 @@ state_t :: struct {
 	wl_shm:             u32,
 	wl_shm_pool:        u32,
 	wl_buffer:          u32,
+	buffer_ready:       bool,
 	xdg_wm_base:        u32,
 	xdg_surface:        u32,
 	wl_compositor:      u32,
 	wl_surface:         u32,
+	wl_output:          [dynamic]Output,
 	xdg_toplevel:       u32,
 	stride:             u32,
+	max_stride:         u32,
 	w:                  u32,
 	max_w:              u32,
 	h:                  u32,
@@ -76,6 +97,26 @@ _on_wl_registry_global :: proc(name: u32, interface: string, version: u32, user_
 			state.wayland_current_id,
 		)
 		register_event_handler(state, state.wl_shm, &wl_shm_handlers, wl_shm.handle_event)
+	} else if interface == "wl_output" {
+		state.wayland_current_id += 1
+		output := Output {
+			object_id = registry_bind(
+				state.socket_fd,
+				state.wl_registry,
+				name,
+				interface,
+				version,
+				state.wayland_current_id,
+			),
+			is_done   = false,
+		}
+		append(&state.wl_output, output)
+		register_event_handler(
+			state,
+			output.object_id,
+			&wl_output_handlers,
+			wl_output.handle_event,
+		)
 	} else if interface == "xdg_wm_base" {
 		state.wayland_current_id += 1
 		state.xdg_wm_base = registry_bind(
@@ -123,9 +164,56 @@ _on_xdg_surface_configure :: proc(serial: u32, user_data: rawptr) {
 }
 
 // Per-interface event handler tables
-wl_buffer_handlers: wl_buffer.EventHandlers
+wl_buffer_handlers := wl_buffer.EventHandlers {
+	on_release = proc(user_data: rawptr) {
+		state := (^state_t)(user_data)
+		state.buffer_ready = true
+	},
+}
 wl_display_handlers := wl_display.EventHandlers {
 	on_error = _on_wl_display_error,
+}
+wl_output_handlers := wl_output.EventHandlers {
+	on_mode = proc(
+		flags: wl_output.Mode,
+		width: i32,
+		height: i32,
+		refresh: i32,
+		user_data: rawptr,
+	) {
+		state := (^state_t)(user_data)
+		if .Current in flags {
+			this_output := get_output(state, u32(context.user_index))
+			assert(this_output != nil)
+			this_output.w = u32(width)
+			this_output.h = u32(height)
+		}
+	},
+	on_done = proc(user_data: rawptr) {
+		state := (^state_t)(user_data)
+		this_output := get_output(state, u32(context.user_index))
+		assert(this_output != nil)
+		this_output.is_done = true
+
+		all_done := true
+		max_w, max_h: u32
+		for &output in state.wl_output {
+			if !output.is_done {
+				all_done = false
+				break
+			} else {
+				max_w = max(max_w, output.w)
+				max_h = max(max_h, output.h)
+			}
+		}
+
+		if all_done {
+			state.max_w = max_w
+			state.max_h = max_h
+			state.max_stride = state.max_w * color_channels
+			state.shm_pool_size = state.max_h * state.max_stride
+		}
+	},
 }
 wl_registry_handlers := wl_registry.EventHandlers {
 	on_global = _on_wl_registry_global,
@@ -137,6 +225,11 @@ xdg_wm_base_handlers := xdg_wm_base.EventHandlers {
 }
 xdg_toplevel_handlers := xdg_toplevel.EventHandlers {
 	on_close = _on_xdg_toplevel_close,
+	on_configure = proc(width: i32, height: i32, states: []u8, user_data: rawptr) {
+		state := (^state_t)(user_data)
+		state.w = u32(width)
+		state.h = u32(height)
+	},
 }
 xdg_surface_handlers := xdg_surface.EventHandlers {
 	on_configure = _on_xdg_surface_configure,
@@ -286,10 +379,11 @@ registry_bind :: proc(
 }
 
 create_shared_memory_file :: proc(state: ^state_t) {
-	assert(state.w > 0)
-	assert(state.h > 0)
-	assert(state.stride == state.w * color_channels)
+	assert(state.max_w > 0)
+	assert(state.max_h > 0)
+	assert(state.max_stride == state.max_w * color_channels)
 	assert(state.shm_pool_size > 0)
+	assert(state.shm_pool_size == state.max_h * state.max_stride)
 
 	fd, memfd_err := linux.memfd_create("shm_file", {})
 
@@ -416,8 +510,11 @@ wayland_handle_message :: proc(state: ^state_t, msg: ^^u8, msg_len: ^int) {
 	}
 }
 
-can_complete_initialization :: proc(state: ^state_t) -> bool {
+can_initialize_surface :: proc(state: ^state_t) -> bool {
 	return(
+		state.max_w > 0 &&
+		state.max_h > 0 &&
+		state.shm_pool_size > 0 &&
 		state.wl_compositor != 0 &&
 		state.wl_shm != 0 &&
 		state.xdg_wm_base != 0 &&
@@ -425,8 +522,9 @@ can_complete_initialization :: proc(state: ^state_t) -> bool {
 	)
 }
 
-complete_initialization :: proc(state: ^state_t) {
+initialize_surface :: proc(state: ^state_t) {
 	assert(state.state == .STATE_NONE)
+	create_shared_memory_file(state)
 
 	state.wayland_current_id += 1
 	err := wl_compositor.create_surface(
@@ -464,6 +562,8 @@ complete_initialization :: proc(state: ^state_t) {
 		&xdg_toplevel_handlers,
 		xdg_toplevel.handle_event,
 	)
+	err = xdg_toplevel.set_min_size(state.socket_fd, state.xdg_toplevel, 50, 50)
+	if err != nil do os.exit(int(err))
 
 	err = wl_surface.commit(state.socket_fd, state.wl_surface)
 	if err != nil do os.exit(int(err))
@@ -484,14 +584,15 @@ complete_initialization :: proc(state: ^state_t) {
 		state.wl_shm_pool,
 		state.wayland_current_id,
 		0,
-		i32(state.w),
-		i32(state.h),
-		i32(state.stride),
+		i32(state.max_w),
+		i32(state.max_h),
+		i32(state.max_stride),
 		wl_shm.Format.Xrgb8888,
 	)
 	if err != nil do os.exit(int(err))
 	state.wl_buffer = state.wayland_current_id
 	register_event_handler(state, state.wl_buffer, &wl_buffer_handlers, wl_buffer.handle_event)
+	state.buffer_ready = true
 }
 
 draw_next_frame :: proc(state: ^state_t) {
@@ -500,29 +601,41 @@ draw_next_frame :: proc(state: ^state_t) {
 	assert(state.xdg_toplevel != 0)
 	assert(state.shm_pool_data != nil)
 	assert(state.shm_pool_size != 0)
+	assert(state.buffer_ready)
 
+	fmt.printfln("Drawing next frame")
 	pixels := ([^]u32)(state.shm_pool_data)
-	for i: u32 = 0; i < state.w * state.h; i += 1 {
-		border_size :: 4
-		x := u8(i % state.w)
-		y := u8(i / state.w)
-
-		r, g, b: u8
-		// if (x > border_size && u32(x) < state.w - border_size) &&
-		//    (y > border_size && u32(y) < state.h - border_size) {
-		r = (((x / 10) + (y / 10)) % 2) * 255
-		g = (((x / 10) + (y / 10)) % 2) * 255
-		b = (((x / 10) + (y / 10)) % 2) * 255
-		//}
-
-		pixels[i] = (u32(r) << 16) | (u32(g) << 8) | u32(b)
+	x_block := state.w / 10
+	y_block := state.h / 10
+	for y: u32 = 0; y < state.h; y += 1 {
+		for x: u32 = 0; x < state.w; x += 1 {
+			r, g, b: u8
+			// if (x > border_size && u32(x) < state.w - border_size) &&
+			//    (y > border_size && u32(y) < state.h - border_size) {
+			r = u8(((x / x_block) + (y / y_block)) % 2) * 255
+			g = u8(((x / x_block) + (y / y_block)) % 2) * 255
+			b = u8(((x / x_block) + (y / y_block)) % 2) * 255
+			//}
+			pixels[y * state.max_w + x] = (u32(r) << 16) | (u32(g) << 8) | u32(b)
+		}
 	}
 
 	err: linux.Errno
 	err = wl_surface.attach(state.socket_fd, state.wl_surface, state.wl_buffer, 0, 0)
 	if err != nil do os.exit(int(err))
+	err = wl_surface.damage_buffer(
+		state.socket_fd,
+		state.wl_surface,
+		0,
+		0,
+		i32(state.max_w),
+		i32(state.max_h),
+	)
+	if err != nil do os.exit(int(err))
 	err = wl_surface.commit(state.socket_fd, state.wl_surface)
 	if err != nil do os.exit(int(err))
+
+	state.buffer_ready = false
 
 	state.state = .STATE_SURFACE_ATTACHED
 }
@@ -541,7 +654,6 @@ set_dimensions :: proc(state: ^state_t, w: u32, h: u32) {
 	state.h = h
 
 	state.stride = state.w * color_channels
-	state.shm_pool_size = state.h * state.stride
 }
 
 main :: proc() {
@@ -562,12 +674,6 @@ main :: proc() {
 		wl_display.handle_event,
 	)
 
-	state.max_w = 10000
-	state.max_h = 10000
-	set_dimensions(&state, 50, 50)
-
-	create_shared_memory_file(&state)
-
 	state.wayland_current_id += 1
 	err := wl_display.get_registry(socket_fd, wayland_display_object_id, state.wayland_current_id)
 	if err != nil do os.exit(int(err))
@@ -582,11 +688,16 @@ main :: proc() {
 	for running {
 		wayland_handle_messages(&state)
 
-		if (can_complete_initialization(&state)) {
-			complete_initialization(&state)
+		if (can_initialize_surface(&state)) {
+			initialize_surface(&state)
 		}
 
-		if (state.state == .STATE_SURFACE_ACKED_CONFIGURE) {
+		if (state.wl_shm_pool > 0 &&
+			   state.wl_buffer > 0 &&
+			   state.w > 0 &&
+			   state.h > 0 &&
+			   state.buffer_ready &&
+			   state.state == .STATE_SURFACE_ACKED_CONFIGURE) {
 			draw_next_frame(&state)
 		}
 	}
