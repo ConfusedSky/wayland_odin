@@ -330,7 +330,7 @@ emit_event_handler :: proc(sb: ^strings.Builder, ev: ^Event) {
 	handler_name := strings.concatenate({"On", to_camel_case(ev.name)})
 	defer delete(handler_name)
 
-	fmt.sbprintf(sb, "%s :: proc(", handler_name)
+	fmt.sbprintf(sb, "%s :: proc(source_object_id: u32, ", handler_name)
 	for arg, i in ev.args {
 		if i > 0 do strings.write_string(sb, ", ")
 		type_str := arg_type_to_odin_type(arg)
@@ -438,7 +438,7 @@ emit_handle_event_proc :: proc(sb: ^strings.Builder, iface: ^Interface) {
 		)
 		fmt.sbprintf(
 			sb,
-			"\t\tif handlers.on_%s != nil do handlers.on_%s(%suser_data)\n",
+			"\t\tif handlers.on_%s != nil do handlers.on_%s(object_id, %suser_data)\n",
 			ev.name,
 			ev.name,
 			strings.to_string(call_args_sb),

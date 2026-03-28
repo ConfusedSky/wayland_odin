@@ -78,12 +78,24 @@ state_t :: struct {
 
 // Event handler callbacks
 
-_on_wl_display_error :: proc(object_id: u32, code: u32, message: string, user_data: rawptr) {
+_on_wl_display_error :: proc(
+	_: u32,
+	object_id: u32,
+	code: u32,
+	message: string,
+	user_data: rawptr,
+) {
 	fmt.eprintfln("fatal error: target_object_id=%v code=%v error=%s", object_id, code, message)
 	os.exit(int(linux.Errno.EINVAL))
 }
 
-_on_wl_registry_global :: proc(name: u32, interface: string, version: u32, user_data: rawptr) {
+_on_wl_registry_global :: proc(
+	_: u32,
+	name: u32,
+	interface: string,
+	version: u32,
+	user_data: rawptr,
+) {
 	state := (^state_t)(user_data)
 	if interface == "wl_shm" {
 		state.wayland_current_id += 1
@@ -145,17 +157,17 @@ _on_wl_registry_global :: proc(name: u32, interface: string, version: u32, user_
 	}
 }
 
-_on_xdg_wm_base_ping :: proc(serial: u32, user_data: rawptr) {
+_on_xdg_wm_base_ping :: proc(_: u32, serial: u32, user_data: rawptr) {
 	state := (^state_t)(user_data)
 	err := xdg_wm_base.pong(state.socket_fd, state.xdg_wm_base, serial)
 	if err != nil do os.exit(int(err))
 }
 
-_on_xdg_toplevel_close :: proc(user_data: rawptr) {
+_on_xdg_toplevel_close :: proc(_: u32, user_data: rawptr) {
 	running = false
 }
 
-_on_xdg_surface_configure :: proc(serial: u32, user_data: rawptr) {
+_on_xdg_surface_configure :: proc(_: u32, serial: u32, user_data: rawptr) {
 	state := (^state_t)(user_data)
 	err := xdg_surface.ack_configure(state.socket_fd, state.xdg_surface, serial)
 	if err != nil do os.exit(int(err))
@@ -164,7 +176,7 @@ _on_xdg_surface_configure :: proc(serial: u32, user_data: rawptr) {
 
 // Per-interface event handler tables
 wl_buffer_handlers := wl_buffer.EventHandlers {
-	on_release = proc(user_data: rawptr) {
+	on_release = proc(_: u32, user_data: rawptr) {
 		state := (^state_t)(user_data)
 		state.buffer_ready = true
 	},
@@ -174,6 +186,7 @@ wl_display_handlers := wl_display.EventHandlers {
 }
 wl_output_handlers := wl_output.EventHandlers {
 	on_mode = proc(
+		source_object_id: u32,
 		flags: wl_output.Mode,
 		width: i32,
 		height: i32,
@@ -182,15 +195,15 @@ wl_output_handlers := wl_output.EventHandlers {
 	) {
 		state := (^state_t)(user_data)
 		if .Current in flags {
-			this_output := get_output(state, u32(context.user_index))
+			this_output := get_output(state, source_object_id)
 			assert(this_output != nil)
 			this_output.w = u32(width)
 			this_output.h = u32(height)
 		}
 	},
-	on_done = proc(user_data: rawptr) {
+	on_done = proc(source_object_id: u32, user_data: rawptr) {
 		state := (^state_t)(user_data)
-		this_output := get_output(state, u32(context.user_index))
+		this_output := get_output(state, source_object_id)
 		assert(this_output != nil)
 		this_output.is_done = true
 
@@ -224,9 +237,10 @@ xdg_wm_base_handlers := xdg_wm_base.EventHandlers {
 }
 xdg_toplevel_handlers := xdg_toplevel.EventHandlers {
 	on_close = _on_xdg_toplevel_close,
-	on_configure = proc(width: i32, height: i32, states: []u8, user_data: rawptr) {
+	on_configure = proc(_: u32, width: i32, height: i32, states: []u8, user_data: rawptr) {
 		state := (^state_t)(user_data)
 		if width < 50 || height < 50 {
+			state.w, state.h = 50, 50
 			return
 		}
 		state.w = u32(width)
@@ -486,7 +500,6 @@ wayland_handle_message :: proc(state: ^state_t, msg: ^^u8, msg_len: ^int) {
 	for handler in state.event_handlers {
 		if object_id == handler.object_id {
 			object_found = true
-			context.user_index = int(object_id)
 			handler.handle_event(object_id, opcode, msg, msg_len, handler.event_handlers, state)
 			break
 		}
