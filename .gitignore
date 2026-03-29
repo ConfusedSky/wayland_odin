@@ -1,4 +1,4 @@
 odin
 wayland_gen.bin
 
-wayland_protocol/
+src/wayland_protocol/

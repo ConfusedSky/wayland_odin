@@ -6,7 +6,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 **Build and run the client:**
 ```bash
-./build        # compiles wayland.odin → ./odin (debug, no optimization)
+./build        # compiles src/wayland.odin → ./odin (debug, no optimization)
 ./odin         # run (requires a running Wayland compositor)
 ```
 
@@ -28,10 +28,10 @@ This is a from-scratch Wayland client written in Odin. There are two largely ind
 
 ### Code generator (`wayland_gen/`)
 
-Reads Wayland XML protocol files and emits one Odin package per interface into `wayland_protocol/`. The pipeline is:
+Reads Wayland XML protocol files and emits one Odin package per interface into `src/wayland_protocol/`. The pipeline is:
 
 ```
-XML → parse.odin → IR (ir.odin) → validate.odin → generate.odin → wayland_protocol/<iface>/<iface>.odin
+XML → parse.odin → IR (ir.odin) → validate.odin → generate.odin → src/wayland_protocol/<iface>/<iface>.odin
 ```
 
 `ir.odin` defines the IR structs (`Protocol`, `Interface`, `Request`, `Event`, `Enum`, `Arg`).
@@ -47,7 +47,7 @@ XML → parse.odin → IR (ir.odin) → validate.odin → generate.odin → wayl
 
 **After any change to `wayland_gen/`, run `./generate_protocol` to regenerate and then rebuild with `./build`.**
 
-### Generated protocol packages (`wayland_protocol/<iface>/`)
+### Generated protocol packages (`src/wayland_protocol/<iface>/`)
 
 Each package is auto-generated — **do not edit by hand**. Every package exports:
 
@@ -57,19 +57,19 @@ Each package is auto-generated — **do not edit by hand**. Every package export
 - `EventHandlers` struct with one nullable proc field per event
 - `handle_event(object_id, opcode, msg, msg_len, handlers_raw, user_data)` — reads wire args via `buf_reader`, prints a debug line with `[handled]`/`[unhandled]`, and dispatches to the handler if non-nil
 
-`wayland_protocol/` is git-ignored; regenerate it with `./generate_protocol`.
+`src/wayland_protocol/` is git-ignored; regenerate it with `./generate_protocol`. Referenced via the `wayland_protocol` collection (e.g., `wl_display "wayland_protocol:wl_display"`).
 
 ### Wire I/O
 
-**`buf_writer/`** — stack-allocated write buffer. `Writer($N)` holds a fixed `[N]u8` array. `initialize` writes the message header (object id, opcode, announced size). Each `write_*` proc appends data and updates the announced size field in place. `send` / `send_with_fd` flush over the socket.
+**`src/buf_writer/`** — stack-allocated write buffer. `Writer($N)` holds a fixed `[N]u8` array. `initialize` writes the message header (object id, opcode, announced size). Each `write_*` proc appends data and updates the announced size field in place. `send` / `send_with_fd` flush over the socket.
 
-**`buf_reader/`** — mirrors buf_writer for reading. All procs take `(buf: ^^u8, buf_size: ^int)` and advance the pointer in place. `read_string` allocates and strips the null terminator (caller must `delete`). `read_array` allocates the byte slice (caller must `delete`).
+**`src/buf_reader/`** — mirrors buf_writer for reading. All procs take `(buf: ^^u8, buf_size: ^int)` and advance the pointer in place. `read_string` allocates and strips the null terminator (caller must `delete`). `read_array` allocates the byte slice (caller must `delete`).
 
-**`utils/`** — `roundup_4` for Wayland's 4-byte alignment requirement.
+**`src/utils/`** — `roundup_4` for Wayland's 4-byte alignment requirement.
 
-**`constants/`** — `BUF_WRITER_SIZE_BASE = 128`, `BUF_WRITER_SIZE_STRING = 512` (use the larger one for requests that include strings).
+**`src/constants/`** — `BUF_WRITER_SIZE_BASE = 128`, `BUF_WRITER_SIZE_STRING = 512` (use the larger one for requests that include strings).
 
-### Client application (`wayland.odin`)
+### Client application (`src/wayland.odin`)
 
 Single-file client in `package Main`. Key concepts:
 
