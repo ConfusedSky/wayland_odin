@@ -12,6 +12,15 @@ read_u32 :: proc(buf: ^^u8, buf_size: ^int) -> u32 {
 	return res
 }
 
+read_u16 :: proc(buf: ^^u8, buf_size: ^int) -> u16 {
+	assert(buf_size^ >= size_of(u16))
+	assert(uintptr(buf^) % size_of(u16) == 0)
+	res := (^u16)(buf^)^
+	buf^ = mem.ptr_offset(buf^, size_of(u16))
+	buf_size^ -= size_of(u16)
+	return res
+}
+
 read_i32 :: proc(buf: ^^u8, buf_size: ^int) -> i32 {
 	assert(buf_size^ >= size_of(i32))
 	assert(uintptr(buf^) % size_of(i32) == 0)
