@@ -32,7 +32,6 @@ Output :: struct {
 	is_done:   bool,
 	w:         u32,
 	h:         u32,
-	user_data: OutputUserData,
 }
 
 state_state_t :: enum {
@@ -118,17 +117,18 @@ _on_wl_registry_global :: proc(
 		}
 		assert(state.wl_output_count < MAX_OUTPUTS)
 		state.wl_output[state.wl_output_count] = output
-		state.wl_output[state.wl_output_count].user_data = OutputUserData {
-			state  = state,
-			output = &state.wl_output[state.wl_output_count],
-		}
 		state.wl_output_count += 1
+		output_user_data := new(OutputUserData)
+		output_user_data^ = OutputUserData {
+			state  = state,
+			output = &state.wl_output[state.wl_output_count - 1],
+		}
 		register_event_handler(
 			state,
 			output.object_id,
 			&wl_output_handlers,
 			wl_output.handle_event,
-			&state.wl_output[state.wl_output_count - 1].user_data,
+			output_user_data,
 		)
 	} else if interface == "xdg_wm_base" {
 		state.wayland_current_id += 1
@@ -184,12 +184,7 @@ wl_buffer_handlers := wl_buffer.EventHandlers {
 			state.buffer_ready = true
 		} else {
 			// Old buffer destroyed while in flight — safe to clean up its handler now
-			for handler, i in state.event_handlers {
-				if handler.object_id == source_object_id {
-					ordered_remove(&state.event_handlers, i)
-					break
-				}
-			}
+			unregister_event_handler(state, source_object_id)
 		}
 	},
 }
@@ -301,6 +296,18 @@ register_event_handler :: proc(
 	)
 }
 
+unregister_event_handler :: proc(state: ^state_t, object_id: u32) {
+	for handler, i in state.event_handlers {
+		if handler.object_id == object_id {
+			if handler.user_data != rawptr(state) {
+				free(handler.user_data)
+			}
+			unordered_remove(&state.event_handlers, i)
+			return
+		}
+	}
+}
+
 wayland_display_connect :: proc() -> linux.Fd {
 	xdg_runtime_dir_buf: [64]u8 = ---
 	xdg_runtime_dir, xdg_runtime_dir_error := os.lookup_env(
@@ -352,6 +359,15 @@ wayland_display_connect :: proc() -> linux.Fd {
 	}
 
 	return fd
+}
+
+cleanup :: proc(state: ^state_t) {
+	for len(state.event_handlers) > 0 {
+		unregister_event_handler(state, state.event_handlers[0].object_id)
+	}
+	delete(state.event_handlers)
+	if state.shm_pool_data != nil do cleanup_shared_memory_file(state)
+	wayland_display_connection_cleanup(state.socket_fd)
 }
 
 wayland_display_connection_cleanup :: proc(fd: linux.Fd) {
@@ -759,6 +775,5 @@ main :: proc() {
 	}
 
 	fmt.println("Got termination signal. Terminating...")
-	if (state.shm_pool_data != nil) do cleanup_shared_memory_file(&state)
-	wayland_display_connection_cleanup(socket_fd)
+	cleanup(&state)
 }
