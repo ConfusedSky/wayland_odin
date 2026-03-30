@@ -53,6 +53,67 @@ set_dimensions :: proc(state: ^state_t, w: u32, h: u32) {
 	state.stride = state.w * constants.COLOR_CHANNELS
 }
 
+initialize_xdg_wm_base :: proc(state: ^state_t, name: u32, version: u32) {
+	state.wayland_current_id += 1
+	state.xdg_wm_base = registry_bind(
+		state.socket_fd,
+		state.wl_registry,
+		name,
+		"xdg_wm_base",
+		version,
+		state.wayland_current_id,
+	)
+	register_event_handler(
+		state,
+		state.xdg_wm_base,
+		&xdg_wm_base_handlers,
+		xdg_wm_base.handle_event,
+	)
+}
+
+initialize_wl_surface :: proc(state: ^state_t) {
+	state.wayland_current_id += 1
+	err := wl_compositor.create_surface(
+		state.socket_fd,
+		state.wl_compositor,
+		state.wayland_current_id,
+	)
+	if err != nil do os.exit(int(err))
+	state.wl_surface = state.wayland_current_id
+	register_event_handler(state, state.wl_surface, &wl_surface_handlers, wl_surface.handle_event)
+}
+
+initialize_xdg_surface :: proc(state: ^state_t) {
+	state.wayland_current_id += 1
+	err := xdg_wm_base.get_xdg_surface(
+		state.socket_fd,
+		state.xdg_wm_base,
+		state.wayland_current_id,
+		state.wl_surface,
+	)
+	if err != nil do os.exit(int(err))
+	state.xdg_surface = state.wayland_current_id
+	register_event_handler(
+		state,
+		state.xdg_surface,
+		&xdg_surface_handlers,
+		xdg_surface.handle_event,
+	)
+}
+
+initialize_xdg_toplevel :: proc(state: ^state_t) {
+	state.wayland_current_id += 1
+	err := xdg_surface.get_toplevel(state.socket_fd, state.xdg_surface, state.wayland_current_id)
+	if err != nil do os.exit(int(err))
+	state.xdg_toplevel = state.wayland_current_id
+	register_event_handler(
+		state,
+		state.xdg_toplevel,
+		&xdg_toplevel_handlers,
+		xdg_toplevel.handle_event,
+	)
+}
+
 can_initialize_surface :: proc(state: ^state_t) -> bool {
 	return(
 		state.max_w > 0 &&
@@ -68,59 +129,14 @@ can_initialize_surface :: proc(state: ^state_t) -> bool {
 initialize_surface :: proc(state: ^state_t) {
 	assert(state.state == .STATE_NONE)
 	create_shared_memory_file(state)
-
-	state.wayland_current_id += 1
-	err := wl_compositor.create_surface(
-		state.socket_fd,
-		state.wl_compositor,
-		state.wayland_current_id,
-	)
+	initialize_wl_surface(state)
+	initialize_xdg_surface(state)
+	initialize_xdg_toplevel(state)
+	err := xdg_toplevel.set_min_size(state.socket_fd, state.xdg_toplevel, 50, 50)
 	if err != nil do os.exit(int(err))
-	state.wl_surface = state.wayland_current_id
-	register_event_handler(state, state.wl_surface, &wl_surface_handlers, wl_surface.handle_event)
-
-	state.wayland_current_id += 1
-	err = xdg_wm_base.get_xdg_surface(
-		state.socket_fd,
-		state.xdg_wm_base,
-		state.wayland_current_id,
-		state.wl_surface,
-	)
-	if err != nil do os.exit(int(err))
-	state.xdg_surface = state.wayland_current_id
-	register_event_handler(
-		state,
-		state.xdg_surface,
-		&xdg_surface_handlers,
-		xdg_surface.handle_event,
-	)
-
-	state.wayland_current_id += 1
-	err = xdg_surface.get_toplevel(state.socket_fd, state.xdg_surface, state.wayland_current_id)
-	if err != nil do os.exit(int(err))
-	state.xdg_toplevel = state.wayland_current_id
-	register_event_handler(
-		state,
-		state.xdg_toplevel,
-		&xdg_toplevel_handlers,
-		xdg_toplevel.handle_event,
-	)
-	err = xdg_toplevel.set_min_size(state.socket_fd, state.xdg_toplevel, 50, 50)
-	if err != nil do os.exit(int(err))
-
 	err = wl_surface.commit(state.socket_fd, state.wl_surface)
 	if err != nil do os.exit(int(err))
-
-	state.wayland_current_id += 1
-	err = wl_shm.create_pool(
-		state.socket_fd,
-		state.wl_shm,
-		state.wayland_current_id,
-		state.shm_fd,
-		i32(state.shm_pool_size),
-	)
-	if err != nil do os.exit(int(err))
-	state.wl_shm_pool = state.wayland_current_id
+	initialize_wl_shm_pool(state)
 	state.buffer_ready = true
 }
 
@@ -140,22 +156,7 @@ draw_next_frame :: proc(state: ^state_t) {
 			if err != nil do os.exit(int(err))
 			// Keep the handler registered until the compositor sends on_release
 		}
-		state.wayland_current_id += 1
-		err := wl_shm_pool.create_buffer(
-			state.socket_fd,
-			state.wl_shm_pool,
-			state.wayland_current_id,
-			0,
-			i32(state.w),
-			i32(state.h),
-			i32(state.w * constants.COLOR_CHANNELS),
-			wl_shm.Format.Xrgb8888,
-		)
-		if err != nil do os.exit(int(err))
-		state.wl_buffer = state.wayland_current_id
-		state.buf_w = state.w
-		state.buf_h = state.h
-		register_event_handler(state, state.wl_buffer, &wl_buffer_handlers, wl_buffer.handle_event)
+		initialize_wl_buffer(state)
 	}
 
 	if state.w < 10 || state.h < 10 {

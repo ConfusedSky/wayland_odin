@@ -15,6 +15,36 @@ OutputUserData :: struct {
 	state:  ^state_t,
 }
 
+initialize_wl_output :: proc(state: ^state_t, name: u32, version: u32) {
+	state.wayland_current_id += 1
+	output := Output {
+		object_id = registry_bind(
+			state.socket_fd,
+			state.wl_registry,
+			name,
+			"wl_output",
+			version,
+			state.wayland_current_id,
+		),
+		is_done   = false,
+	}
+	assert(state.wl_output_count < constants.MAX_OUTPUTS)
+	state.wl_output[state.wl_output_count] = output
+	state.wl_output_count += 1
+	output_user_data := new(OutputUserData)
+	output_user_data^ = OutputUserData {
+		state  = state,
+		output = &state.wl_output[state.wl_output_count - 1],
+	}
+	register_event_handler(
+		state,
+		output.object_id,
+		&wl_output_handlers,
+		wl_output.handle_event,
+		output_user_data,
+	)
+}
+
 wl_output_handlers := wl_output.EventHandlers {
 	on_mode = proc(
 		source_object_id: u32,

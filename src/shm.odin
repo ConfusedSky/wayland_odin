@@ -5,8 +5,35 @@ import "core:fmt"
 import "core:os"
 import "core:sys/linux"
 import wl_shm "wayland_protocol/wl_shm"
+import wl_shm_pool "wayland_protocol/wl_shm_pool"
 
 wl_shm_handlers: wl_shm.EventHandlers
+
+initialize_wl_shm :: proc(state: ^state_t, name: u32, version: u32) {
+	state.wayland_current_id += 1
+	state.wl_shm = registry_bind(
+		state.socket_fd,
+		state.wl_registry,
+		name,
+		"wl_shm",
+		version,
+		state.wayland_current_id,
+	)
+	register_event_handler(state, state.wl_shm, &wl_shm_handlers, wl_shm.handle_event)
+}
+
+initialize_wl_shm_pool :: proc(state: ^state_t) {
+	state.wayland_current_id += 1
+	err := wl_shm.create_pool(
+		state.socket_fd,
+		state.wl_shm,
+		state.wayland_current_id,
+		state.shm_fd,
+		i32(state.shm_pool_size),
+	)
+	if err != nil do os.exit(int(err))
+	state.wl_shm_pool = state.wayland_current_id
+}
 
 create_shared_memory_file :: proc(state: ^state_t) {
 	assert(state.max_w > 0)

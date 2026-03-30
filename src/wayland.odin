@@ -21,7 +21,7 @@ main :: proc() {
 
 	state: state_t
 	initialize_display(&state)
-	initialize_registry(&state)
+	initialize_wl_registry(&state)
 
 	for running {
 		wayland_handle_messages(&state)
