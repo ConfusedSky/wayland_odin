@@ -354,7 +354,7 @@ emit_event_handlers_struct :: proc(sb: ^strings.Builder, iface: ^Interface) {
 emit_handle_event_proc :: proc(sb: ^strings.Builder, iface: ^Interface) {
 	fmt.sbprintf(
 		sb,
-		"handle_event :: proc(object_id: u32, opcode: u16, msg: ^^u8, msg_len: ^int, handlers_raw: rawptr, user_data: rawptr) {{\n",
+		"handle_event :: proc(object_id: u32, opcode: u16, msg: ^^u8, msg_len: ^int, handlers_raw: rawptr, user_data: rawptr, fds: ^[]linux.Fd) {{\n",
 	)
 	fmt.sbprintf(sb, "\thandlers := (^EventHandlers)(handlers_raw)\n")
 	strings.write_string(sb, "\tswitch opcode {\n")
@@ -379,41 +379,34 @@ emit_handle_event_proc :: proc(sb: ^strings.Builder, iface: ^Interface) {
 		defer strings.builder_destroy(&call_args_sb)
 
 		first_print_arg := true
-		has_fd := false
 
 		for &arg in ev.args {
 			if arg.type == "fd" {
-				fmt.sbprintf(
-					sb,
-					"\t\t// skipped fd arg '%s': received via ancillary data\n",
-					arg.name,
-				)
-				has_fd = true
-				continue
-			}
-
-			switch {
-			case arg.enum_ref != "":
-				type_str := arg_type_to_odin_type(arg)
-				defer delete(type_str)
-				fmt.sbprintf(
-					sb,
-					"\t\t%s := transmute(%s)(buf_reader.read_u32(msg, msg_len))\n",
-					arg.name,
-					type_str,
-				)
-			case arg.type == "uint", arg.type == "object", arg.type == "new_id":
-				fmt.sbprintf(sb, "\t\t%s := buf_reader.read_u32(msg, msg_len)\n", arg.name)
-			case arg.type == "int":
-				fmt.sbprintf(sb, "\t\t%s := buf_reader.read_i32(msg, msg_len)\n", arg.name)
-			case arg.type == "fixed":
-				fmt.sbprintf(sb, "\t\t%s := buf_reader.read_fixed(msg, msg_len)\n", arg.name)
-			case arg.type == "string":
-				fmt.sbprintf(sb, "\t\t%s := buf_reader.read_string(msg, msg_len)\n", arg.name)
-				fmt.sbprintf(sb, "\t\tdefer delete(%s)\n", arg.name)
-			case arg.type == "array":
-				fmt.sbprintf(sb, "\t\t%s := buf_reader.read_array(msg, msg_len)\n", arg.name)
-				fmt.sbprintf(sb, "\t\tdefer delete(%s)\n", arg.name)
+				fmt.sbprintf(sb, "\t\t%s := fds[0]; fds^ = fds[1:]\n", arg.name)
+			} else {
+				switch {
+				case arg.enum_ref != "":
+					type_str := arg_type_to_odin_type(arg)
+					defer delete(type_str)
+					fmt.sbprintf(
+						sb,
+						"\t\t%s := transmute(%s)(buf_reader.read_u32(msg, msg_len))\n",
+						arg.name,
+						type_str,
+					)
+				case arg.type == "uint", arg.type == "object", arg.type == "new_id":
+					fmt.sbprintf(sb, "\t\t%s := buf_reader.read_u32(msg, msg_len)\n", arg.name)
+				case arg.type == "int":
+					fmt.sbprintf(sb, "\t\t%s := buf_reader.read_i32(msg, msg_len)\n", arg.name)
+				case arg.type == "fixed":
+					fmt.sbprintf(sb, "\t\t%s := buf_reader.read_fixed(msg, msg_len)\n", arg.name)
+				case arg.type == "string":
+					fmt.sbprintf(sb, "\t\t%s := buf_reader.read_string(msg, msg_len)\n", arg.name)
+					fmt.sbprintf(sb, "\t\tdefer delete(%s)\n", arg.name)
+				case arg.type == "array":
+					fmt.sbprintf(sb, "\t\t%s := buf_reader.read_array(msg, msg_len)\n", arg.name)
+					fmt.sbprintf(sb, "\t\tdefer delete(%s)\n", arg.name)
+				}
 			}
 
 			if first_print_arg {
@@ -438,25 +431,13 @@ emit_handle_event_proc :: proc(sb: ^strings.Builder, iface: ^Interface) {
 			strings.to_string(print_args_sb),
 			ev.name,
 		)
-		if has_fd {
-			fmt.sbprintf(
-				sb,
-				"\t\t// skipped calling handler, receiving fd is not implemented yet\n",
-			)
-			fmt.eprintfln(
-				"warn: %s.%s: skipped handler implementation, receiving fd is not implemented yet...",
-				iface.name,
-				ev.name,
-			)
-		} else {
-			fmt.sbprintf(
-				sb,
-				"\t\tif handlers.on_%s != nil do handlers.on_%s(object_id, %suser_data)\n",
-				ev.name,
-				ev.name,
-				strings.to_string(call_args_sb),
-			)
-		}
+		fmt.sbprintf(
+			sb,
+			"\t\tif handlers.on_%s != nil do handlers.on_%s(object_id, %suser_data)\n",
+			ev.name,
+			ev.name,
+			strings.to_string(call_args_sb),
+		)
 	}
 
 	strings.write_string(sb, "\t}\n")

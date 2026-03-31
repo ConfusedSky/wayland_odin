@@ -49,6 +49,7 @@ HandleEventProc :: proc(
 	msg_len: ^int,
 	handlers_raw: rawptr,
 	user_data: rawptr,
+	fds: ^[]linux.Fd,
 )
 
 RegisteredEventHandler :: struct {
