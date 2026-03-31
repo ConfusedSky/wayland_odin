@@ -12,6 +12,9 @@ state_state_t :: enum {
 state_t :: struct {
 	socket_fd:          linux.Fd,
 	wl_registry:        u32,
+	wl_seat:            u32,
+	wl_keyboard:        u32,
+	wl_pointer:         u32,
 	wl_shm:             u32,
 	wl_shm_pool:        u32,
 	wl_buffer:          u32,
@@ -66,9 +69,9 @@ register_event_handler :: proc(
 		&state.event_handlers,
 		RegisteredEventHandler {
 			event_handlers = event_handlers,
-			object_id      = object_id,
-			handle_event   = handle_event,
-			user_data      = user_data if user_data != nil else state,
+			object_id = object_id,
+			handle_event = handle_event,
+			user_data = user_data if user_data != nil else state,
 		},
 	)
 }

@@ -379,6 +379,7 @@ emit_handle_event_proc :: proc(sb: ^strings.Builder, iface: ^Interface) {
 		defer strings.builder_destroy(&call_args_sb)
 
 		first_print_arg := true
+		has_fd := false
 
 		for &arg in ev.args {
 			if arg.type == "fd" {
@@ -387,6 +388,7 @@ emit_handle_event_proc :: proc(sb: ^strings.Builder, iface: ^Interface) {
 					"\t\t// skipped fd arg '%s': received via ancillary data\n",
 					arg.name,
 				)
+				has_fd = true
 				continue
 			}
 
@@ -436,13 +438,25 @@ emit_handle_event_proc :: proc(sb: ^strings.Builder, iface: ^Interface) {
 			strings.to_string(print_args_sb),
 			ev.name,
 		)
-		fmt.sbprintf(
-			sb,
-			"\t\tif handlers.on_%s != nil do handlers.on_%s(object_id, %suser_data)\n",
-			ev.name,
-			ev.name,
-			strings.to_string(call_args_sb),
-		)
+		if has_fd {
+			fmt.sbprintf(
+				sb,
+				"\t\t// skipped calling handler, receiving fd is not implemented yet\n",
+			)
+			fmt.eprintfln(
+				"warn: %s.%s: skipped handler implementation, receiving fd is not implemented yet...",
+				iface.name,
+				ev.name,
+			)
+		} else {
+			fmt.sbprintf(
+				sb,
+				"\t\tif handlers.on_%s != nil do handlers.on_%s(object_id, %suser_data)\n",
+				ev.name,
+				ev.name,
+				strings.to_string(call_args_sb),
+			)
+		}
 	}
 
 	strings.write_string(sb, "\t}\n")

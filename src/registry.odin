@@ -82,13 +82,16 @@ on_wl_registry_global :: proc(
 	user_data: rawptr,
 ) {
 	state := (^state_t)(user_data)
-	if interface == "wl_shm" {
+	switch interface {
+	case "wl_seat":
+		initialize_seat(state, name, version)
+	case "wl_shm":
 		initialize_wl_shm(state, name, version)
-	} else if interface == "wl_output" {
+	case "wl_output":
 		initialize_wl_output(state, name, version)
-	} else if interface == "xdg_wm_base" {
+	case "xdg_wm_base":
 		initialize_xdg_wm_base(state, name, version)
-	} else if interface == "wl_compositor" {
+	case "wl_compositor":
 		initialize_wl_compositor(state, name, version)
 	}
 }
