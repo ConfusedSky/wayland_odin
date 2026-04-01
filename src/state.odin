@@ -15,6 +15,7 @@ state_t :: struct {
 	wl_seat:            u32,
 	wl_keyboard:        u32,
 	wl_pointer:         u32,
+	pointer:            Pointer,
 	wl_shm:             u32,
 	wl_shm_pool:        u32,
 	wl_buffer:          u32,

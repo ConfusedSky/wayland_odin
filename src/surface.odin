@@ -7,7 +7,6 @@ import "core:sys/linux"
 import wl_buffer "wayland_protocol/wl_buffer"
 import wl_compositor "wayland_protocol/wl_compositor"
 import wl_shm "wayland_protocol/wl_shm"
-import wl_shm_pool "wayland_protocol/wl_shm_pool"
 import wl_surface "wayland_protocol/wl_surface"
 import xdg_surface "wayland_protocol/xdg_surface"
 import xdg_toplevel "wayland_protocol/xdg_toplevel"
@@ -159,21 +158,27 @@ draw_next_frame :: proc(state: ^state_t) {
 		initialize_wl_buffer(state)
 	}
 
-	if state.w < 10 || state.h < 10 {
+	if state.w < constants.NUM_CELLS || state.h < constants.NUM_CELLS {
 		state.state = .STATE_SURFACE_ATTACHED
 		fmt.eprintfln("State is to small to safely draw the next frame")
 		return
 	}
 
 	pixels := ([^]u32)(state.shm_pool_data)
+	p_x_prime := u32(state.pointer.surface_x) * constants.NUM_CELLS / state.w
+	p_y_prime := u32(state.pointer.surface_y) * constants.NUM_CELLS / state.h
 	for y: u32 = 0; y < state.h; y += 1 {
 		for x: u32 = 0; x < state.w; x += 1 {
 			r, g, b: u8
-			x_prime := x * 10 / state.w
-			y_prime := y * 10 / state.h
-			r = u8((x_prime + y_prime) % 2) * 255
-			g = u8((x_prime + y_prime) % 2) * 255
-			b = u8((x_prime + y_prime) % 2) * 255
+			x_prime := x * constants.NUM_CELLS / state.w
+			y_prime := y * constants.NUM_CELLS / state.h
+			if p_x_prime == x_prime && p_y_prime == y_prime {
+				r = 255
+			} else {
+				r = u8((x_prime + y_prime) % 2) * 255
+				g = u8((x_prime + y_prime) % 2) * 255
+				b = u8((x_prime + y_prime) % 2) * 255
+			}
 			pixels[y * state.w + x] = (u32(r) << 16) | (u32(g) << 8) | u32(b)
 		}
 	}
