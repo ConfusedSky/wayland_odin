@@ -98,7 +98,6 @@ can_initialize_surface :: proc(state: ^state_t) -> bool {
 	return(
 		state.max_w > 0 &&
 		state.max_h > 0 &&
-		state.shm_pool_size > 0 &&
 		state.wl_compositor.id != 0 &&
 		state.wl_shm.id != 0 &&
 		state.xdg_wm_base.id != 0 &&
@@ -108,7 +107,6 @@ can_initialize_surface :: proc(state: ^state_t) -> bool {
 
 initialize_surface :: proc(state: ^state_t) {
 	assert(state.state == .STATE_NONE)
-	create_shared_memory_file(state)
 	initialize_wl_surface(state)
 	initialize_xdg_surface(state)
 	initialize_xdg_toplevel(state)
@@ -116,7 +114,7 @@ initialize_surface :: proc(state: ^state_t) {
 	if err != nil do os.exit(int(err))
 	err = wl_surface.commit(&state.wl_surface)
 	if err != nil do os.exit(int(err))
-	initialize_wl_shm_pool(state)
+	initialize_wl_shm_pool(&state.wl_shm, &state.shm_pool, state.max_h * state.max_stride)
 	state.buffer_ready = true
 }
 
@@ -124,8 +122,8 @@ draw_next_frame :: proc(state: ^state_t) {
 	assert(state.wl_surface.id != 0)
 	assert(state.xdg_surface.id != 0)
 	assert(state.xdg_toplevel.id != 0)
-	assert(state.shm_pool_data != nil)
-	assert(state.shm_pool_size != 0)
+	assert(state.shm_pool.data != nil)
+	assert(state.shm_pool.size != 0)
 	assert(state.buffer_ready)
 
 	fmt.printfln("Drawing next frame")
@@ -145,7 +143,7 @@ draw_next_frame :: proc(state: ^state_t) {
 		return
 	}
 
-	pixels := ([^]u32)(state.shm_pool_data)
+	pixels := ([^]u32)(state.shm_pool.data)
 	p_x_prime := u32(state.pointer.surface_x) * constants.NUM_CELLS / state.w
 	p_y_prime := u32(state.pointer.surface_y) * constants.NUM_CELLS / state.h
 	for y: u32 = 0; y < state.h; y += 1 {

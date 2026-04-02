@@ -77,7 +77,6 @@ wl_output_handlers := wl_output.EventHandlers {
 			data.state.max_w = max_w
 			data.state.max_h = max_h
 			data.state.max_stride = data.state.max_w * constants.COLOR_CHANNELS
-			data.state.shm_pool_size = data.state.max_h * data.state.max_stride
 		}
 	},
 }

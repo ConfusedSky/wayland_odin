@@ -10,7 +10,6 @@ import wl_pointer "wayland_protocol/wl_pointer"
 import wl_registry "wayland_protocol/wl_registry"
 import wl_seat "wayland_protocol/wl_seat"
 import wl_shm "wayland_protocol/wl_shm"
-import wl_shm_pool "wayland_protocol/wl_shm_pool"
 import wl_surface "wayland_protocol/wl_surface"
 import xdg_surface "wayland_protocol/xdg_surface"
 import xdg_toplevel "wayland_protocol/xdg_toplevel"
@@ -30,7 +29,6 @@ state_t :: struct {
 	wl_pointer:      wl_pointer.t,
 	pointer:         Pointer,
 	wl_shm:          wl_shm.t,
-	wl_shm_pool:     wl_shm_pool.t,
 	wl_buffer:       wl_buffer.t,
 	buffer_ready:    bool,
 	xdg_wm_base:     xdg_wm_base.t,
@@ -48,9 +46,7 @@ state_t :: struct {
 	max_h:           u32,
 	buf_w:           u32,
 	buf_h:           u32,
-	shm_pool_size:   u32,
-	shm_fd:          linux.Fd,
-	shm_pool_data:   ^u8,
+	shm_pool:        ShmPool,
 	state:           state_state_t,
 	event_handlers:  [dynamic]RegisteredEventHandler,
 }
@@ -107,6 +103,6 @@ cleanup :: proc(state: ^state_t) {
 		unregister_event_handler(state, state.event_handlers[0].object_id)
 	}
 	delete(state.event_handlers)
-	if state.shm_pool_data != nil do cleanup_shared_memory_file(state)
+	if state.shm_pool.data != nil do cleanup_wl_shm_pool(&state.shm_pool)
 	wayland_display_connection_cleanup(state.wl_display.socket)
 }

@@ -30,7 +30,7 @@ main :: proc() {
 			initialize_surface(&state)
 		}
 
-		if (state.wl_shm_pool.id > 0 &&
+		if (state.shm_pool.wl_shm_pool.id > 0 &&
 			   state.w > 0 &&
 			   state.h > 0 &&
 			   state.buffer_ready &&

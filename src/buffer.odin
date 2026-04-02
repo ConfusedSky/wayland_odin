@@ -20,7 +20,7 @@ wl_buffer_handlers := wl_buffer.EventHandlers {
 
 initialize_wl_buffer :: proc(state: ^state_t) {
 	buf, err := wl_shm_pool.create_buffer(
-		&state.wl_shm_pool,
+		&state.shm_pool.wl_shm_pool,
 		0,
 		i32(state.w),
 		i32(state.h),
