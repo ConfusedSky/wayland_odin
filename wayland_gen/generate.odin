@@ -183,7 +183,8 @@ collect_imports :: proc(
 			}
 			// Import packages for proxy return types (new_id) and proxy params (object).
 			// Cross-package enum refs are resolved through the shared enums package instead.
-			if (arg.type == "new_id" || arg.type == "object") && arg.interface != "" {
+			// Skip self-imports: the current interface is already in scope as ^t.
+			if (arg.type == "new_id" || arg.type == "object") && arg.interface != "" && arg.interface != iface.name {
 				if !seen[arg.interface] {
 					seen[arg.interface] = true
 					append(&extra_pkgs, arg.interface)
@@ -395,7 +396,7 @@ emit_request_proc :: proc(
 	strings.write_string(sb, doc)
 
 	// --- Signature ---
-	fmt.sbprintf(sb, "%s :: proc(proxy: ^t", req.name)
+	fmt.sbprintf(sb, "%s :: proc(%s: ^t", req.name, iface_name)
 
 	write_calls_sb: strings.Builder
 	strings.builder_init(&write_calls_sb)
@@ -447,7 +448,11 @@ emit_request_proc :: proc(
 
 		// Object with known interface: typed proxy pointer
 		if arg.type == "object" && arg.interface != "" {
-			fmt.sbprintf(sb, ", %s: ^%s.t", arg.name, arg.interface)
+			if arg.interface == iface_name {
+				fmt.sbprintf(sb, ", %s: ^t", arg.name)
+			} else {
+				fmt.sbprintf(sb, ", %s: ^%s.t", arg.name, arg.interface)
+			}
 			fmt.sbprintf(&asserts_sb, "\tassert(%s.id > 0)\n", arg.name)
 			fmt.sbprintf(&write_calls_sb, "\tbuf_writer.write_u32(&writer, %s.id)\n", arg.name)
 			if first_print_arg {
@@ -524,23 +529,24 @@ emit_request_proc :: proc(
 
 	// Proxy assert (display has no id field)
 	if !is_display {
-		strings.write_string(sb, "\tassert(proxy.id > 0)\n")
+		fmt.sbprintf(sb, "\tassert(%s.id > 0)\n", iface_name)
 	}
 	strings.write_string(sb, strings.to_string(asserts_sb))
 
 	// Allocate next id for typed new_id args
 	if has_new_id {
 		if is_display {
-			strings.write_string(sb, "\tproxy.next_id += 1\n")
-			strings.write_string(sb, "\tnew_id := proxy.next_id\n")
+			fmt.sbprintf(sb, "\t%s.next_id += 1\n", iface_name)
+			fmt.sbprintf(sb, "\tnew_id := %s.next_id\n", iface_name)
 		} else {
-			strings.write_string(sb, "\tproxy.next_id^ += 1\n")
-			strings.write_string(sb, "\tnew_id := proxy.next_id^\n")
+			fmt.sbprintf(sb, "\t%s.next_id^ += 1\n", iface_name)
+			fmt.sbprintf(sb, "\tnew_id := %s.next_id^\n", iface_name)
 		}
 	}
 
 	// Wire write
-	obj_id_expr := "1" if is_display else "proxy.id"
+	obj_id_expr := "1" if is_display else strings.concatenate({iface_name, ".id"})
+	defer if !is_display do delete(obj_id_expr)
 	fmt.sbprintf(sb, "\twriter: buf_writer.Writer(%s)\n", size_const)
 	fmt.sbprintf(
 		sb,
@@ -566,34 +572,40 @@ emit_request_proc :: proc(
 		if fd_param != "" {
 			fmt.sbprintf(
 				sb,
-				"\terr := buf_writer.send_with_fd(&writer, proxy.socket, %s)\n",
+				"\terr := buf_writer.send_with_fd(&writer, %s.socket, %s)\n",
+				iface_name,
 				fd_param,
 			)
 		} else {
-			strings.write_string(sb, "\terr := buf_writer.send(&writer, proxy.socket)\n")
+			fmt.sbprintf(sb, "\terr := buf_writer.send(&writer, %s.socket)\n", iface_name)
 		}
 		if is_display {
 			fmt.sbprintf(
 				sb,
-				"\treturn %s.t{{socket = proxy.socket, next_id = &proxy.next_id, id = new_id}}, err\n",
+				"\treturn %s.t{{socket = %s.socket, next_id = &%s.next_id, id = new_id}}, err\n",
 				new_id_iface,
+				iface_name,
+				iface_name,
 			)
 		} else {
 			fmt.sbprintf(
 				sb,
-				"\treturn %s.t{{socket = proxy.socket, next_id = proxy.next_id, id = new_id}}, err\n",
+				"\treturn %s.t{{socket = %s.socket, next_id = %s.next_id, id = new_id}}, err\n",
 				new_id_iface,
+				iface_name,
+				iface_name,
 			)
 		}
 	} else {
 		if fd_param != "" {
 			fmt.sbprintf(
 				sb,
-				"\treturn buf_writer.send_with_fd(&writer, proxy.socket, %s)\n",
+				"\treturn buf_writer.send_with_fd(&writer, %s.socket, %s)\n",
+				iface_name,
 				fd_param,
 			)
 		} else {
-			strings.write_string(sb, "\treturn buf_writer.send(&writer, proxy.socket)\n")
+			fmt.sbprintf(sb, "\treturn buf_writer.send(&writer, %s.socket)\n", iface_name)
 		}
 	}
 
