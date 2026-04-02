@@ -25,7 +25,7 @@ wayland_handle_messages :: proc(state: ^state_t) {
 		control = cmsg_buf[:],
 	}
 
-	read_bytes, recv_err := linux.recvmsg(state.socket_fd, &socket_msg, {.CMSG_CLOEXEC})
+	read_bytes, recv_err := linux.recvmsg(state.wl_display.socket, &socket_msg, {.CMSG_CLOEXEC})
 
 	if recv_err == .EINTR {
 		return
@@ -73,7 +73,7 @@ wayland_handle_message :: proc(state: ^state_t, msg: ^^u8, msg_len: ^int, fds: ^
 	assert(msg_len^ >= 8)
 
 	object_id := buf_reader.read_u32(msg, msg_len)
-	assert(object_id <= state.wayland_current_id)
+	assert(object_id <= state.wl_display.next_id)
 	opcode := buf_reader.read_u16(msg, msg_len)
 	announced_size := buf_reader.read_u16(msg, msg_len)
 

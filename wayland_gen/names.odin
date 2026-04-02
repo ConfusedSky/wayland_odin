@@ -100,18 +100,26 @@ split_enum_ref :: proc(enum_ref: string) -> (pkg: string, name: string, ok: bool
 }
 
 // Maps a Wayland arg to its Odin type string.
-// For enum args, returns the camel-cased enum name, qualified with the package
-// prefix for cross-interface refs (e.g. "wl_shm.format" -> "wl_shm.Format").
+// For same-package enum refs, returns the camel-cased enum name (e.g. "Format").
+// For cross-package enum refs, returns a fully-qualified name through the shared
+// enums package (e.g. "wayland_enums.WlShmFormat") when enums_pkg is provided.
 // Caller owns returned string.
-arg_type_to_odin_type :: proc(arg: Arg) -> string {
+arg_type_to_odin_type :: proc(arg: Arg, enums_pkg: string = "") -> string {
 	if arg.enum_ref != "" {
 		pkg, ref_name, cross := split_enum_ref(arg.enum_ref)
 		if !cross {
 			return to_camel_case(arg.enum_ref)
 		}
-		name := to_camel_case(ref_name)
-		defer delete(name)
-		return strings.concatenate({pkg, ".", name})
+		// Cross-package ref: route through the shared enums package.
+		pkg_camel := to_camel_case(pkg)
+		defer delete(pkg_camel)
+		name_camel := to_camel_case(ref_name)
+		defer delete(name_camel)
+		if enums_pkg != "" {
+			return strings.concatenate({enums_pkg, ".", pkg_camel, name_camel})
+		}
+		// Fallback: qualified directly (may cause cyclic imports — avoid if possible)
+		return strings.concatenate({pkg, ".", name_camel})
 	}
 	switch arg.type {
 	case "int":    return strings.clone("i32")

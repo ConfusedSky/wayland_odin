@@ -1,4 +1,6 @@
 package Main
+
+import "core:os"
 import wl_seat "wayland_protocol/wl_seat"
 
 wl_seat_handlers := wl_seat.EventHandlers {
@@ -18,14 +20,8 @@ wl_seat_handlers := wl_seat.EventHandlers {
 }
 
 initialize_seat :: proc(state: ^state_t, name: u32, version: u32) {
-	state.wayland_current_id += 1
-	state.wl_seat = registry_bind(
-		state.socket_fd,
-		state.wl_registry,
-		name,
-		"wl_seat",
-		version,
-		state.wayland_current_id,
-	)
-	register_event_handler(state, state.wl_seat, &wl_seat_handlers, wl_seat.handle_event)
+	seat, err := wl_seat.from_global(&state.wl_registry, name, version)
+	if err != nil do os.exit(int(err))
+	state.wl_seat = seat
+	register_event_handler(state, state.wl_seat.id, &wl_seat_handlers, wl_seat.handle_event)
 }

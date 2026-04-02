@@ -9,7 +9,7 @@ import wl_shm_pool "wayland_protocol/wl_shm_pool"
 wl_buffer_handlers := wl_buffer.EventHandlers {
 	on_release = proc(source_object_id: u32, user_data: rawptr) {
 		state := (^state_t)(user_data)
-		if source_object_id == state.wl_buffer {
+		if source_object_id == state.wl_buffer.id {
 			state.buffer_ready = true
 		} else {
 			// Old buffer destroyed while in flight — safe to clean up its handler now
@@ -19,11 +19,8 @@ wl_buffer_handlers := wl_buffer.EventHandlers {
 }
 
 initialize_wl_buffer :: proc(state: ^state_t) {
-	state.wayland_current_id += 1
-	err := wl_shm_pool.create_buffer(
-		state.socket_fd,
-		state.wl_shm_pool,
-		state.wayland_current_id,
+	buf, err := wl_shm_pool.create_buffer(
+		&state.wl_shm_pool,
 		0,
 		i32(state.w),
 		i32(state.h),
@@ -31,8 +28,8 @@ initialize_wl_buffer :: proc(state: ^state_t) {
 		wl_shm.Format.Xrgb8888,
 	)
 	if err != nil do os.exit(int(err))
-	state.wl_buffer = state.wayland_current_id
+	state.wl_buffer = buf
 	state.buf_w = state.w
 	state.buf_h = state.h
-	register_event_handler(state, state.wl_buffer, &wl_buffer_handlers, wl_buffer.handle_event)
+	register_event_handler(state, state.wl_buffer.id, &wl_buffer_handlers, wl_buffer.handle_event)
 }

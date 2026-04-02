@@ -1,13 +1,14 @@
 package Main
 
 import constants "./constants"
+import "core:os"
 import wl_output "wayland_protocol/wl_output"
 
 Output :: struct {
-	object_id: u32,
-	is_done:   bool,
-	w:         u32,
-	h:         u32,
+	proxy:   wl_output.t,
+	is_done: bool,
+	w:       u32,
+	h:       u32,
 }
 
 OutputUserData :: struct {
@@ -16,17 +17,11 @@ OutputUserData :: struct {
 }
 
 initialize_wl_output :: proc(state: ^state_t, name: u32, version: u32) {
-	state.wayland_current_id += 1
+	proxy, err := wl_output.from_global(&state.wl_registry, name, version)
+	if err != nil do os.exit(int(err))
 	output := Output {
-		object_id = registry_bind(
-			state.socket_fd,
-			state.wl_registry,
-			name,
-			"wl_output",
-			version,
-			state.wayland_current_id,
-		),
-		is_done   = false,
+		proxy   = proxy,
+		is_done = false,
 	}
 	assert(state.wl_output_count < constants.MAX_OUTPUTS)
 	state.wl_output[state.wl_output_count] = output
@@ -38,7 +33,7 @@ initialize_wl_output :: proc(state: ^state_t, name: u32, version: u32) {
 	}
 	register_event_handler(
 		state,
-		output.object_id,
+		proxy.id,
 		&wl_output_handlers,
 		wl_output.handle_event,
 		output_user_data,

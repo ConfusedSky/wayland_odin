@@ -1,6 +1,5 @@
 package Main
 
-import constants "./constants"
 import "core:fmt"
 import "core:mem"
 import "core:os"
@@ -9,20 +8,22 @@ import wl_display "wayland_protocol/wl_display"
 
 wl_display_handlers := wl_display.EventHandlers {
 	on_error = proc(_: u32, object_id: u32, code: u32, message: string, user_data: rawptr) {
-		fmt.eprintfln("fatal error: target_object_id=%v code=%v error=%s", object_id, code, message)
+		fmt.eprintfln(
+			"fatal error: target_object_id=%v code=%v error=%s",
+			object_id,
+			code,
+			message,
+		)
 		os.exit(int(linux.Errno.EINVAL))
 	},
 }
 
 initialize_display :: proc(state: ^state_t) {
 	socket_fd := wayland_display_connect()
-
-	state.wayland_current_id = 1
-	state.socket_fd = socket_fd
-
+	state.wl_display = wl_display.init(socket_fd)
 	register_event_handler(
 		state,
-		constants.WAYLAND_DISPLAY_OBJECT_ID,
+		1, // wl_display always has object id 1
 		&wl_display_handlers,
 		wl_display.handle_event,
 	)

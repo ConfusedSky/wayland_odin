@@ -6,7 +6,6 @@ import "core:os"
 import "core:sys/linux"
 import wl_buffer "wayland_protocol/wl_buffer"
 import wl_compositor "wayland_protocol/wl_compositor"
-import wl_shm "wayland_protocol/wl_shm"
 import wl_surface "wayland_protocol/wl_surface"
 import xdg_surface "wayland_protocol/xdg_surface"
 import xdg_toplevel "wayland_protocol/xdg_toplevel"
@@ -16,7 +15,7 @@ wl_surface_handlers: wl_surface.EventHandlers
 xdg_wm_base_handlers := xdg_wm_base.EventHandlers {
 	on_ping = proc(_: u32, serial: u32, user_data: rawptr) {
 		state := (^state_t)(user_data)
-		err := xdg_wm_base.pong(state.socket_fd, state.xdg_wm_base, serial)
+		err := xdg_wm_base.pong(&state.xdg_wm_base, serial)
 		if err != nil do os.exit(int(err))
 	},
 }
@@ -37,7 +36,7 @@ xdg_toplevel_handlers := xdg_toplevel.EventHandlers {
 xdg_surface_handlers := xdg_surface.EventHandlers {
 	on_configure = proc(_: u32, serial: u32, user_data: rawptr) {
 		state := (^state_t)(user_data)
-		err := xdg_surface.ack_configure(state.socket_fd, state.xdg_surface, serial)
+		err := xdg_surface.ack_configure(&state.xdg_surface, serial)
 		if err != nil do os.exit(int(err))
 		state.state = .STATE_SURFACE_ACKED_CONFIGURE
 	},
@@ -53,61 +52,43 @@ set_dimensions :: proc(state: ^state_t, w: u32, h: u32) {
 }
 
 initialize_xdg_wm_base :: proc(state: ^state_t, name: u32, version: u32) {
-	state.wayland_current_id += 1
-	state.xdg_wm_base = registry_bind(
-		state.socket_fd,
-		state.wl_registry,
-		name,
-		"xdg_wm_base",
-		version,
-		state.wayland_current_id,
-	)
+	base, err := xdg_wm_base.from_global(&state.wl_registry, name, version)
+	if err != nil do os.exit(int(err))
+	state.xdg_wm_base = base
 	register_event_handler(
 		state,
-		state.xdg_wm_base,
+		state.xdg_wm_base.id,
 		&xdg_wm_base_handlers,
 		xdg_wm_base.handle_event,
 	)
 }
 
 initialize_wl_surface :: proc(state: ^state_t) {
-	state.wayland_current_id += 1
-	err := wl_compositor.create_surface(
-		state.socket_fd,
-		state.wl_compositor,
-		state.wayland_current_id,
-	)
+	surface, err := wl_compositor.create_surface(&state.wl_compositor)
 	if err != nil do os.exit(int(err))
-	state.wl_surface = state.wayland_current_id
-	register_event_handler(state, state.wl_surface, &wl_surface_handlers, wl_surface.handle_event)
+	state.wl_surface = surface
+	register_event_handler(state, state.wl_surface.id, &wl_surface_handlers, wl_surface.handle_event)
 }
 
 initialize_xdg_surface :: proc(state: ^state_t) {
-	state.wayland_current_id += 1
-	err := xdg_wm_base.get_xdg_surface(
-		state.socket_fd,
-		state.xdg_wm_base,
-		state.wayland_current_id,
-		state.wl_surface,
-	)
+	surf, err := xdg_wm_base.get_xdg_surface(&state.xdg_wm_base, &state.wl_surface)
 	if err != nil do os.exit(int(err))
-	state.xdg_surface = state.wayland_current_id
+	state.xdg_surface = surf
 	register_event_handler(
 		state,
-		state.xdg_surface,
+		state.xdg_surface.id,
 		&xdg_surface_handlers,
 		xdg_surface.handle_event,
 	)
 }
 
 initialize_xdg_toplevel :: proc(state: ^state_t) {
-	state.wayland_current_id += 1
-	err := xdg_surface.get_toplevel(state.socket_fd, state.xdg_surface, state.wayland_current_id)
+	toplevel, err := xdg_surface.get_toplevel(&state.xdg_surface)
 	if err != nil do os.exit(int(err))
-	state.xdg_toplevel = state.wayland_current_id
+	state.xdg_toplevel = toplevel
 	register_event_handler(
 		state,
-		state.xdg_toplevel,
+		state.xdg_toplevel.id,
 		&xdg_toplevel_handlers,
 		xdg_toplevel.handle_event,
 	)
@@ -118,10 +99,10 @@ can_initialize_surface :: proc(state: ^state_t) -> bool {
 		state.max_w > 0 &&
 		state.max_h > 0 &&
 		state.shm_pool_size > 0 &&
-		state.wl_compositor != 0 &&
-		state.wl_shm != 0 &&
-		state.xdg_wm_base != 0 &&
-		state.wl_surface == 0 \
+		state.wl_compositor.id != 0 &&
+		state.wl_shm.id != 0 &&
+		state.xdg_wm_base.id != 0 &&
+		state.wl_surface.id == 0 \
 	)
 }
 
@@ -131,18 +112,18 @@ initialize_surface :: proc(state: ^state_t) {
 	initialize_wl_surface(state)
 	initialize_xdg_surface(state)
 	initialize_xdg_toplevel(state)
-	err := xdg_toplevel.set_min_size(state.socket_fd, state.xdg_toplevel, 50, 50)
+	err := xdg_toplevel.set_min_size(&state.xdg_toplevel, 50, 50)
 	if err != nil do os.exit(int(err))
-	err = wl_surface.commit(state.socket_fd, state.wl_surface)
+	err = wl_surface.commit(&state.wl_surface)
 	if err != nil do os.exit(int(err))
 	initialize_wl_shm_pool(state)
 	state.buffer_ready = true
 }
 
 draw_next_frame :: proc(state: ^state_t) {
-	assert(state.wl_surface != 0)
-	assert(state.xdg_surface != 0)
-	assert(state.xdg_toplevel != 0)
+	assert(state.wl_surface.id != 0)
+	assert(state.xdg_surface.id != 0)
+	assert(state.xdg_toplevel.id != 0)
 	assert(state.shm_pool_data != nil)
 	assert(state.shm_pool_size != 0)
 	assert(state.buffer_ready)
@@ -150,8 +131,8 @@ draw_next_frame :: proc(state: ^state_t) {
 	fmt.printfln("Drawing next frame")
 
 	if state.w != state.buf_w || state.h != state.buf_h {
-		if state.wl_buffer != 0 {
-			err := wl_buffer.destroy(state.socket_fd, state.wl_buffer)
+		if state.wl_buffer.id != 0 {
+			err := wl_buffer.destroy(&state.wl_buffer)
 			if err != nil do os.exit(int(err))
 			// Keep the handler registered until the compositor sends on_release
 		}
@@ -184,21 +165,15 @@ draw_next_frame :: proc(state: ^state_t) {
 	}
 
 	err: linux.Errno
-	err = wl_surface.attach(state.socket_fd, state.wl_surface, state.wl_buffer, 0, 0)
+	err = wl_surface.attach(&state.wl_surface, &state.wl_buffer, 0, 0)
 	if err != nil do os.exit(int(err))
-	err = wl_surface.damage_buffer(
-		state.socket_fd,
-		state.wl_surface,
-		0,
-		0,
-		i32(state.w),
-		i32(state.h),
-	)
+	err = wl_surface.damage_buffer(&state.wl_surface, 0, 0, i32(state.w), i32(state.h))
 	if err != nil do os.exit(int(err))
-	err = wl_surface.commit(state.socket_fd, state.wl_surface)
+	err = wl_surface.commit(&state.wl_surface)
 	if err != nil do os.exit(int(err))
 
 	state.buffer_ready = false
 
 	state.state = .STATE_SURFACE_ATTACHED
 }
+
