@@ -34,6 +34,7 @@ initialize_cursor :: proc(compositor: ^wl_compositor.t, shm: ^wl_shm.t, cursor: 
 	images := xcursor.library_load_images("default", "default", xcursor_size)
 	assert(images != nil)
 	assert(len(images.images) == 1)
+	defer xcursor.images_destroy(images)
 
 	image := images.images[0]
 	fmt.printfln("Loaded cursor %v", images.name)
@@ -43,7 +44,7 @@ initialize_cursor :: proc(compositor: ^wl_compositor.t, shm: ^wl_shm.t, cursor: 
 	cursor.yhot = image.yhot
 
 	initialize_wl_shm_pool(shm, &cursor.pool, size)
-	mem.copy(cursor.pool.data, &image.pixels[0], int(size))
+	mem.copy(cursor.pool.data, raw_data(image.pixels), int(size))
 
 	buf, err := wl_shm_pool.create_buffer(
 		&cursor.pool.wl_shm_pool,
@@ -64,6 +65,16 @@ initialize_cursor :: proc(compositor: ^wl_compositor.t, shm: ^wl_shm.t, cursor: 
 	if err != nil do os.exit(int(err))
 
 	cursor.initialized = true
+}
+
+cleanup_cursor :: proc(cursor: ^Cursor) {
+	assert(cursor.initialized)
+	err := wl_surface.destroy(&cursor.surface)
+	if err != nil do os.exit(int(err))
+	err = wl_buffer.destroy(&cursor.buffer)
+	if err != nil do os.exit(int(err))
+	cleanup_wl_shm_pool(&cursor.pool)
+	cursor^ = {}
 }
 
 Pointer :: struct {

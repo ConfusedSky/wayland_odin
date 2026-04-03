@@ -28,7 +28,7 @@ main :: proc() {
 
 		if (state.wl_compositor.id > 0 &&
 			   state.wl_shm.id > 0 &&
-			   state.cursor.initialized == false) {
+			   !state.cursor.initialized) {
 			initialize_cursor(&state.wl_compositor, &state.wl_shm, &state.cursor)
 		}
 

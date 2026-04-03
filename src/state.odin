@@ -104,6 +104,7 @@ cleanup :: proc(state: ^state_t) {
 		unregister_event_handler(state, state.event_handlers[0].object_id)
 	}
 	delete(state.event_handlers)
+	if state.cursor.initialized do cleanup_cursor(&state.cursor)
 	if state.shm_pool.data != nil do cleanup_wl_shm_pool(&state.shm_pool)
 	wayland_display_connection_cleanup(state.wl_display.socket)
 }

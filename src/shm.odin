@@ -40,9 +40,7 @@ cleanup_wl_shm_pool :: proc(shm_pool: ^ShmPool) {
 	err := wl_shm_pool.destroy(&shm_pool.wl_shm_pool)
 	if err != nil do os.exit(int(err))
 	cleanup_shared_memory_file(shm_pool.fd, shm_pool.data, shm_pool.size)
-	shm_pool.fd = 0
-	shm_pool.data = nil
-	shm_pool.size = 0
+	shm_pool^ = {}
 }
 
 create_shared_memory_file :: proc(size: u32) -> (linux.Fd, ^u8) {

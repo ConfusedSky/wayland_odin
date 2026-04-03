@@ -67,7 +67,12 @@ initialize_wl_surface :: proc(state: ^state_t) {
 	surface, err := wl_compositor.create_surface(&state.wl_compositor)
 	if err != nil do os.exit(int(err))
 	state.wl_surface = surface
-	register_event_handler(state, state.wl_surface.id, &wl_surface_handlers, wl_surface.handle_event)
+	register_event_handler(
+		state,
+		state.wl_surface.id,
+		&wl_surface_handlers,
+		wl_surface.handle_event,
+	)
 }
 
 initialize_xdg_surface :: proc(state: ^state_t) {
@@ -96,6 +101,7 @@ initialize_xdg_toplevel :: proc(state: ^state_t) {
 
 can_initialize_surface :: proc(state: ^state_t) -> bool {
 	return(
+		state.cursor.initialized &&
 		state.max_w > 0 &&
 		state.max_h > 0 &&
 		state.wl_compositor.id != 0 &&
@@ -174,4 +180,3 @@ draw_next_frame :: proc(state: ^state_t) {
 
 	state.state = .STATE_SURFACE_ATTACHED
 }
-
