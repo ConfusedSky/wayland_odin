@@ -104,11 +104,10 @@ wayland_handle_message :: proc(state: ^state_t, msg: ^^u8, msg_len: ^int, fds: ^
 
 	if !object_found {
 		fmt.eprintfln(
-			"unknown event: object_id=%d opcode=%d size=%d state=%v, skipping...",
+			"unknown event: object_id=%d opcode=%d size=%d skipping...",
 			object_id,
 			opcode,
 			announced_size,
-			state,
 		)
 	}
 

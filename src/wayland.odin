@@ -26,6 +26,12 @@ main :: proc() {
 	for running {
 		wayland_handle_messages(&state)
 
+		if (state.wl_compositor.id > 0 &&
+			   state.wl_shm.id > 0 &&
+			   state.cursor.initialized == false) {
+			initialize_cursor(&state.wl_compositor, &state.wl_shm, &state.cursor)
+		}
+
 		if (can_initialize_surface(&state)) {
 			initialize_surface(&state)
 		}

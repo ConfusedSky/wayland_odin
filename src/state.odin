@@ -22,6 +22,7 @@ state_state_t :: enum {
 }
 
 state_t :: struct {
+	cursor:          Cursor,
 	wl_display:      wl_display.t,
 	wl_registry:     wl_registry.t,
 	wl_seat:         wl_seat.t,
