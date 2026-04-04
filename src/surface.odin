@@ -130,6 +130,8 @@ draw_next_frame :: proc(state: ^state_t) {
 	assert(state.xdg_toplevel.id != 0)
 	assert(state.shm_pool.data != nil)
 	assert(state.shm_pool.size != 0)
+	assert(state.shm_pool.wl_shm_pool.id > 0)
+	assert(state.w > 0 && state.h > 0)
 	assert(state.buffer_ready)
 
 	fmt.printfln("Drawing next frame")

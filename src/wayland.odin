@@ -23,24 +23,24 @@ main :: proc() {
 	initialize_display(&state)
 	initialize_wl_registry(&state)
 
+	wayland_handle_messages(&state)
+	if (state.wl_compositor.id > 0 && state.wl_shm.id > 0 && !state.cursor.initialized) {
+		initialize_cursor(&state.wl_compositor, &state.wl_shm, &state.cursor)
+	} else {
+		panic("Cursor failed to initialize")
+	}
+
+	wayland_handle_messages(&state)
+	if (can_initialize_surface(&state)) {
+		initialize_surface(&state)
+	} else {
+		panic("Surface failed to initialize")
+	}
+
 	for running {
 		wayland_handle_messages(&state)
 
-		if (state.wl_compositor.id > 0 &&
-			   state.wl_shm.id > 0 &&
-			   !state.cursor.initialized) {
-			initialize_cursor(&state.wl_compositor, &state.wl_shm, &state.cursor)
-		}
-
-		if (can_initialize_surface(&state)) {
-			initialize_surface(&state)
-		}
-
-		if (state.shm_pool.wl_shm_pool.id > 0 &&
-			   state.w > 0 &&
-			   state.h > 0 &&
-			   state.buffer_ready &&
-			   state.state == .STATE_SURFACE_ACKED_CONFIGURE) {
+		if (state.buffer_ready && state.state == .STATE_SURFACE_ACKED_CONFIGURE) {
 			draw_next_frame(&state)
 		}
 	}
