@@ -1,7 +1,6 @@
 package Main
 
 import constants "./constants"
-import "core:os"
 import wl_buffer "wayland_protocol/wl_buffer"
 import wl_shm "wayland_protocol/wl_shm"
 import wl_shm_pool "wayland_protocol/wl_shm_pool"
@@ -18,18 +17,17 @@ wl_buffer_handlers := wl_buffer.EventHandlers {
 	},
 }
 
-initialize_wl_buffer :: proc(state: ^state_t) {
-	buf, err := wl_shm_pool.create_buffer(
+initialize_wl_buffer :: proc(state: ^state_t) -> Errno {
+	state.wl_buffer = wl_shm_pool.create_buffer(
 		&state.shm_pool.wl_shm_pool,
 		0,
 		i32(state.w),
 		i32(state.h),
 		i32(state.w * constants.COLOR_CHANNELS),
 		wl_shm.Format.Xrgb8888,
-	)
-	if err != nil do os.exit(int(err))
-	state.wl_buffer = buf
+	) or_return
 	state.buf_w = state.w
 	state.buf_h = state.h
 	register_event_handler(state, state.wl_buffer.id, &wl_buffer_handlers, wl_buffer.handle_event)
+	return nil
 }

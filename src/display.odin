@@ -14,12 +14,13 @@ wl_display_handlers := wl_display.EventHandlers {
 			code,
 			message,
 		)
+		// wl_display errors are unrecoverable per the Wayland spec
 		os.exit(int(linux.Errno.EINVAL))
 	},
 }
 
-initialize_display :: proc(state: ^state_t) {
-	socket_fd := wayland_display_connect()
+initialize_display :: proc(state: ^state_t) -> Errno {
+	socket_fd := wayland_display_connect() or_return
 	state.wl_display = wl_display.init(socket_fd)
 	register_event_handler(
 		state,
@@ -27,9 +28,10 @@ initialize_display :: proc(state: ^state_t) {
 		&wl_display_handlers,
 		wl_display.handle_event,
 	)
+	return nil
 }
 
-wayland_display_connect :: proc() -> linux.Fd {
+wayland_display_connect :: proc() -> (linux.Fd, Errno) {
 	xdg_runtime_dir_buf: [64]u8 = ---
 	xdg_runtime_dir, xdg_runtime_dir_error := os.lookup_env(
 		xdg_runtime_dir_buf[:],
@@ -38,7 +40,7 @@ wayland_display_connect :: proc() -> linux.Fd {
 
 	if xdg_runtime_dir_error != nil {
 		fmt.eprintln("XDG_RUNTIME_DIR not found!")
-		os.exit(int(linux.Errno.EINVAL))
+		return -1, linux.Errno.EINVAL
 	}
 
 	wayland_display_buf: [64]u8 = ---
@@ -66,26 +68,25 @@ wayland_display_connect :: proc() -> linux.Fd {
 	mem.copy(&addr.sun_path[socket_path_length], raw_data(display_name[:]), len(display_name))
 
 	fd, socket_err := linux.socket(.UNIX, .STREAM, {}, {})
-
 	if fd == -1 || socket_err != nil {
 		fmt.eprintln("socket() failed:", socket_err)
-		os.exit(int(socket_err))
+		return -1, socket_err
 	}
 
 	connect_err := linux.connect(fd, &addr)
 	if connect_err != nil {
 		fmt.eprintln("connect() failed:", connect_err)
-		os.exit(int(connect_err))
+		return -1, connect_err
 	}
 
-	return fd
+	return fd, nil
 }
 
-wayland_display_connection_cleanup :: proc(fd: linux.Fd) {
+wayland_display_connection_cleanup :: proc(fd: linux.Fd) -> Errno {
 	close_err := linux.close(fd)
-
-	if (close_err != nil) {
+	if close_err != nil {
 		fmt.eprintln("close failed")
-		os.exit(int(close_err))
+		return close_err
 	}
+	return nil
 }

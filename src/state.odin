@@ -21,6 +21,8 @@ state_state_t :: enum {
 	STATE_SURFACE_ATTACHED,
 }
 
+Errno :: linux.Errno
+
 state_t :: struct {
 	cursor:          Cursor,
 	wl_display:      wl_display.t,
@@ -50,6 +52,7 @@ state_t :: struct {
 	shm_pool:        ShmPool,
 	state:           state_state_t,
 	event_handlers:  [dynamic]RegisteredEventHandler,
+	last_err:        Errno,
 }
 
 HandleEventProc :: proc(
@@ -76,6 +79,11 @@ register_event_handler :: proc(
 	handle_event: HandleEventProc,
 	user_data: rawptr = nil,
 ) {
+	// IDs are monotonically increasing, so append maintains sorted order
+	assert(
+		len(state.event_handlers) == 0 ||
+		object_id > state.event_handlers[len(state.event_handlers) - 1].object_id,
+	)
 	append(
 		&state.event_handlers,
 		RegisteredEventHandler {
@@ -88,23 +96,39 @@ register_event_handler :: proc(
 }
 
 unregister_event_handler :: proc(state: ^state_t, object_id: u32) {
-	for handler, i in state.event_handlers {
-		if handler.object_id == object_id {
-			if handler.user_data != rawptr(state) {
-				free(handler.user_data)
-			}
-			unordered_remove(&state.event_handlers, i)
-			return
-		}
+	idx, found := find_event_handler(state.event_handlers[:], object_id)
+	if !found do return
+	handler := state.event_handlers[idx]
+	if handler.user_data != rawptr(state) {
+		free(handler.user_data)
 	}
+	ordered_remove(&state.event_handlers, idx)
 }
 
-cleanup :: proc(state: ^state_t) {
+// Binary search over the sorted event_handlers array.
+find_event_handler :: proc(handlers: []RegisteredEventHandler, object_id: u32) -> (int, bool) {
+	lo, hi := 0, len(handlers)
+	for lo < hi {
+		mid := lo + (hi - lo) / 2
+		mid_id := handlers[mid].object_id
+		if mid_id == object_id {
+			return mid, true
+		} else if mid_id < object_id {
+			lo = mid + 1
+		} else {
+			hi = mid
+		}
+	}
+	return 0, false
+}
+
+cleanup :: proc(state: ^state_t) -> Errno {
 	for len(state.event_handlers) > 0 {
 		unregister_event_handler(state, state.event_handlers[0].object_id)
 	}
 	delete(state.event_handlers)
-	if state.cursor.initialized do cleanup_cursor(&state.cursor)
-	if state.shm_pool.data != nil do cleanup_wl_shm_pool(&state.shm_pool)
-	wayland_display_connection_cleanup(state.wl_display.socket)
+	if state.cursor.initialized do cleanup_cursor(&state.cursor) or_return
+	if state.shm_pool.data != nil do cleanup_wl_shm_pool(&state.shm_pool) or_return
+	wayland_display_connection_cleanup(state.wl_display.socket) or_return
+	return nil
 }

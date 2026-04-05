@@ -1,7 +1,6 @@
 package Main
 
 import constants "./constants"
-import "core:os"
 import wl_output "wayland_protocol/wl_output"
 
 Output :: struct {
@@ -16,9 +15,8 @@ OutputUserData :: struct {
 	state:  ^state_t,
 }
 
-initialize_wl_output :: proc(state: ^state_t, name: u32, version: u32) {
-	proxy, err := wl_output.from_global(&state.wl_registry, name, version)
-	if err != nil do os.exit(int(err))
+initialize_wl_output :: proc(state: ^state_t, name: u32, version: u32) -> Errno {
+	proxy := wl_output.from_global(&state.wl_registry, name, version) or_return
 	output := Output {
 		proxy   = proxy,
 		is_done = false,
@@ -38,6 +36,7 @@ initialize_wl_output :: proc(state: ^state_t, name: u32, version: u32) {
 		wl_output.handle_event,
 		output_user_data,
 	)
+	return nil
 }
 
 wl_output_handlers := wl_output.EventHandlers {

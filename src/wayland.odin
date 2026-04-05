@@ -1,6 +1,7 @@
 package Main
 
 import "core:fmt"
+import "core:os"
 import "core:sys/posix"
 
 running := true
@@ -20,30 +21,39 @@ main :: proc() {
 	posix.sigaction(.SIGTERM, &sa, nil)
 
 	state: state_t
-	initialize_display(&state)
-	initialize_wl_registry(&state)
+	err := run(&state)
+	cleanup(&state)
+	if err != nil {
+		fmt.eprintfln("Fatal error: %v", err)
+		os.exit(int(err))
+	}
+}
+
+run :: proc(state: ^state_t) -> Errno {
+	initialize_display(state) or_return
+	initialize_wl_registry(state) or_return
 
 	for !state.cursor.initialized {
-		wayland_handle_messages(&state)
+		wayland_handle_messages(state) or_return
 		if state.wl_compositor.id > 0 && state.wl_shm.id > 0 {
-			initialize_cursor(&state.wl_compositor, &state.wl_shm, &state.cursor)
+			initialize_cursor(&state.wl_compositor, &state.wl_shm, &state.cursor) or_return
 		}
 	}
 
 	for !state.buffer_ready && state.wl_surface.id == 0 {
-		wayland_handle_messages(&state)
-		if can_initialize_surface(&state) {
-			initialize_surface(&state)
+		wayland_handle_messages(state) or_return
+		if can_initialize_surface(state) {
+			initialize_surface(state) or_return
 		}
 	}
 
 	for running {
-		wayland_handle_messages(&state)
+		wayland_handle_messages(state) or_return
 		if state.buffer_ready && state.state == .STATE_SURFACE_ACKED_CONFIGURE {
-			draw_next_frame(&state)
+			draw_next_frame(state) or_return
 		}
 	}
 
 	fmt.println("Got termination signal. Terminating...")
-	cleanup(&state)
+	return nil
 }

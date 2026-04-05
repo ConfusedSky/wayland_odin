@@ -1,5 +1,6 @@
 package buf_writer
 
+import cmsg "../cmsg"
 import utils "../utils"
 import "core:mem"
 import "core:sys/linux"
@@ -40,34 +41,17 @@ send :: proc(writer: ^Writer($N), socket: linux.Fd) -> linux.Errno {
 
 
 send_with_fd :: proc(writer: ^Writer($N), socket: linux.Fd, fd: linux.Fd) -> linux.Errno {
-	Cmsghdr :: struct {
-		cmsg_len:   uint,
-		cmsg_level: i32,
-		cmsg_type:  i32,
-	}
-
-	SCM_RIGHTS: i32 : 1
-	CMSG_ALIGN :: proc(len: $T) -> T {
-		return (len + size_of(u64) - 1) & (~(int(size_of(u64) - 1)))
-	}
-	CMSG_SPACE :: proc(len: $T) -> T {
-		return CMSG_ALIGN(len) + CMSG_ALIGN(size_of(Cmsghdr))
-	}
-	CMSG_LEN :: proc(len: $T) -> T {
-		return len + CMSG_ALIGN(size_of(Cmsghdr))
-	}
-
 	control_buf: [128]u8
-	cmsg := (^Cmsghdr)(&control_buf[0])
-	cmsg.cmsg_level = i32(linux.SOL_SOCKET)
-	cmsg.cmsg_type = SCM_RIGHTS
-	cmsg.cmsg_len = uint(CMSG_LEN(size_of(fd)))
-	(^i32)(mem.ptr_offset(&control_buf[0], CMSG_ALIGN(size_of(Cmsghdr))))^ = i32(fd)
+	cmsg_hdr := (^cmsg.Cmsghdr)(&control_buf[0])
+	cmsg_hdr.cmsg_level = i32(linux.SOL_SOCKET)
+	cmsg_hdr.cmsg_type = cmsg.SCM_RIGHTS
+	cmsg_hdr.cmsg_len = uint(cmsg.CMSG_LEN(size_of(fd)))
+	(^i32)(mem.ptr_offset(&control_buf[0], cmsg.CMSG_ALIGN(size_of(cmsg.Cmsghdr))))^ = i32(fd)
 
 	iov := [1]linux.IO_Vec{{base = ([^]byte)(&writer.buf[0]), len = uint(writer.buf_size)}}
 	socket_msg := linux.Msg_Hdr {
 		iov     = iov[:],
-		control = control_buf[:CMSG_SPACE(size_of(fd))],
+		control = control_buf[:cmsg.CMSG_SPACE(size_of(fd))],
 	}
 
 	bytes_sent, send_err := linux.sendmsg(socket, &socket_msg, {})
@@ -102,9 +86,8 @@ write_u16_raw :: proc(buf: ^u8, buf_size: ^int, buf_cap: int, x: u16) {
 
 @(private)
 write_data_raw :: proc(buf: ^u8, buf_size: ^int, buf_cap: int, src: []u8) {
-	assert(buf_size^ + len(src) <= buf_cap)
+	assert(buf_size^ + size_of(u32) + utils.roundup_4(len(src)) <= buf_cap)
 
-	// a cstring must be written here, this should probably be made more robust
 	str_len := u32(len(src))
 	write_u32_raw(buf, buf_size, buf_cap, str_len)
 	mem.copy(mem.ptr_offset(buf, buf_size^), raw_data(src[:]), utils.roundup_4(int(str_len)))

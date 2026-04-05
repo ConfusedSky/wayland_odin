@@ -1,6 +1,6 @@
 package Main
 
-import constants "constants"
+import constants "./constants"
 import "core:fmt"
 import "core:mem"
 import "core:os"
@@ -24,7 +24,7 @@ Cursor :: struct {
 	initialized: bool,
 }
 
-initialize_cursor :: proc(compositor: ^wl_compositor.t, shm: ^wl_shm.t, cursor: ^Cursor) {
+initialize_cursor :: proc(compositor: ^wl_compositor.t, shm: ^wl_shm.t, cursor: ^Cursor) -> Errno {
 	assert(cursor.initialized == false)
 
 	xcursor_size_buf: [64]u8 = ---
@@ -43,38 +43,33 @@ initialize_cursor :: proc(compositor: ^wl_compositor.t, shm: ^wl_shm.t, cursor: 
 	cursor.xhot = image.xhot
 	cursor.yhot = image.yhot
 
-	initialize_wl_shm_pool(shm, &cursor.pool, size)
+	initialize_wl_shm_pool(shm, &cursor.pool, size) or_return
 	mem.copy(cursor.pool.data, raw_data(image.pixels), int(size))
 
-	buf, err := wl_shm_pool.create_buffer(
+	cursor.buffer = wl_shm_pool.create_buffer(
 		&cursor.pool.wl_shm_pool,
 		0,
 		i32(image.width),
 		i32(image.height),
 		i32(image.width * constants.COLOR_CHANNELS),
 		wl_shm.Format.Argb8888,
-	)
-	if err != nil do os.exit(int(err))
-	cursor.buffer = buf
+	) or_return
 
-	cursor.surface, err = wl_compositor.create_surface(compositor)
-	if err != nil do os.exit(int(err))
-	err = wl_surface.attach(&cursor.surface, &cursor.buffer, 0, 0)
-	if err != nil do os.exit(int(err))
-	err = wl_surface.commit(&cursor.surface)
-	if err != nil do os.exit(int(err))
+	cursor.surface = wl_compositor.create_surface(compositor) or_return
+	wl_surface.attach(&cursor.surface, &cursor.buffer, 0, 0) or_return
+	wl_surface.commit(&cursor.surface) or_return
 
 	cursor.initialized = true
+	return nil
 }
 
-cleanup_cursor :: proc(cursor: ^Cursor) {
+cleanup_cursor :: proc(cursor: ^Cursor) -> Errno {
 	assert(cursor.initialized)
-	err := wl_surface.destroy(&cursor.surface)
-	if err != nil do os.exit(int(err))
-	err = wl_buffer.destroy(&cursor.buffer)
-	if err != nil do os.exit(int(err))
-	cleanup_wl_shm_pool(&cursor.pool)
+	wl_surface.destroy(&cursor.surface) or_return
+	wl_buffer.destroy(&cursor.buffer) or_return
+	cleanup_wl_shm_pool(&cursor.pool) or_return
 	cursor^ = {}
+	return nil
 }
 
 Pointer :: struct {
@@ -127,14 +122,13 @@ wl_pointer_handlers := wl_pointer.EventHandlers {
 	},
 }
 
-initialize_pointer :: proc(state: ^state_t) {
-	pointer, err := wl_seat.get_pointer(&state.wl_seat)
-	if err != nil do os.exit(int(err))
-	state.wl_pointer = pointer
+initialize_pointer :: proc(state: ^state_t) -> Errno {
+	state.wl_pointer = wl_seat.get_pointer(&state.wl_seat) or_return
 	register_event_handler(
 		state,
 		state.wl_pointer.id,
 		&wl_pointer_handlers,
 		wl_pointer.handle_event,
 	)
+	return nil
 }
