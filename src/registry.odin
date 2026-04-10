@@ -41,6 +41,8 @@ on_wl_registry_global :: proc(
 		err = initialize_xdg_wm_base(state, name, version)
 	case "wl_compositor":
 		err = initialize_wl_compositor(state, name, version)
+	case "zwp_linux_dmabuf_v1":
+		err = initialize_zwp_linux_dmabuf(state, name, version)
 	}
 	if err != nil {
 		state.last_err = err

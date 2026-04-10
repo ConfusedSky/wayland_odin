@@ -2,8 +2,8 @@ package Main
 
 import constants "./constants"
 import "core:fmt"
-import "core:sys/linux"
 import wl_buffer "wayland_protocol/wl_buffer"
+import wl_callback "wayland_protocol/wl_callback"
 import wl_compositor "wayland_protocol/wl_compositor"
 import wl_surface "wayland_protocol/wl_surface"
 import xdg_surface "wayland_protocol/xdg_surface"
@@ -15,7 +15,7 @@ xdg_wm_base_handlers := xdg_wm_base.EventHandlers {
 	on_ping = proc(_: u32, serial: u32, user_data: rawptr) {
 		state := (^state_t)(user_data)
 		err := xdg_wm_base.pong(&state.xdg_wm_base, serial)
-		if err != nil { state.last_err = err }
+		if err != nil {state.last_err = err}
 	},
 }
 xdg_toplevel_handlers := xdg_toplevel.EventHandlers {
@@ -36,18 +36,9 @@ xdg_surface_handlers := xdg_surface.EventHandlers {
 	on_configure = proc(_: u32, serial: u32, user_data: rawptr) {
 		state := (^state_t)(user_data)
 		err := xdg_surface.ack_configure(&state.xdg_surface, serial)
-		if err != nil { state.last_err = err; return }
+		if err != nil {state.last_err = err; return}
 		state.state = .STATE_SURFACE_ACKED_CONFIGURE
 	},
-}
-
-set_dimensions :: proc(state: ^state_t, w: u32, h: u32) {
-	assert(w < state.max_w)
-	assert(h < state.max_h)
-	state.w = w
-	state.h = h
-
-	state.stride = state.w * constants.COLOR_CHANNELS
 }
 
 initialize_xdg_wm_base :: proc(state: ^state_t, name: u32, version: u32) -> Errno {
@@ -73,7 +64,10 @@ initialize_wl_surface :: proc(state: ^state_t) -> Errno {
 }
 
 initialize_xdg_surface :: proc(state: ^state_t) -> Errno {
-	state.xdg_surface = xdg_wm_base.get_xdg_surface(&state.xdg_wm_base, &state.wl_surface) or_return
+	state.xdg_surface = xdg_wm_base.get_xdg_surface(
+		&state.xdg_wm_base,
+		&state.wl_surface,
+	) or_return
 	register_event_handler(
 		state,
 		state.xdg_surface.id,
@@ -100,7 +94,7 @@ can_initialize_surface :: proc(state: ^state_t) -> bool {
 		state.max_w > 0 &&
 		state.max_h > 0 &&
 		state.wl_compositor.id != 0 &&
-		state.wl_shm.id != 0 &&
+		state.zwp_linux_dmabuf.id != 0 &&
 		state.xdg_wm_base.id != 0 &&
 		state.wl_surface.id == 0 \
 	)
@@ -113,7 +107,17 @@ initialize_surface :: proc(state: ^state_t) -> Errno {
 	initialize_xdg_toplevel(state) or_return
 	xdg_toplevel.set_min_size(&state.xdg_toplevel, 50, 50) or_return
 	wl_surface.commit(&state.wl_surface) or_return
-	initialize_wl_shm_pool(&state.wl_shm, &state.shm_pool, state.max_h * state.max_stride) or_return
+
+	vk_buf, err := allocate_vulkan_buffer(&state.vulkan, state.max_w, state.max_h)
+	if err != nil do return err
+	state.vk_buf = vk_buf
+
+	map_err := map_vulkan_buffer(&state.vulkan, &state.vk_buf)
+	if map_err != nil {
+		free_vulkan_buffer(&state.vulkan, &state.vk_buf)
+		return map_err
+	}
+
 	state.buffer_ready = true
 	return nil
 }
@@ -122,9 +126,8 @@ draw_next_frame :: proc(state: ^state_t) -> Errno {
 	assert(state.wl_surface.id != 0)
 	assert(state.xdg_surface.id != 0)
 	assert(state.xdg_toplevel.id != 0)
-	assert(state.shm_pool.data != nil)
-	assert(state.shm_pool.size != 0)
-	assert(state.shm_pool.wl_shm_pool.id > 0)
+	assert(state.vk_buf.data != nil)
+	assert(state.vk_buf.memory != 0)
 	assert(state.w > 0 && state.h > 0)
 	assert(state.buffer_ready)
 
@@ -135,16 +138,27 @@ draw_next_frame :: proc(state: ^state_t) -> Errno {
 			wl_buffer.destroy(&state.wl_buffer) or_return
 			// Keep the handler registered until the compositor sends on_release
 		}
-		initialize_wl_buffer(state) or_return
+		wl_buf, err := import_as_wl_buffer(state, &state.vk_buf, state.w, state.h)
+		if err != nil do return err
+		state.wl_buffer = wl_buf
+		register_event_handler(
+			state,
+			state.wl_buffer.id,
+			&wl_buffer_handlers,
+			wl_buffer.handle_event,
+		)
+		state.buf_w = state.w
+		state.buf_h = state.h
 	}
 
 	if state.w < constants.NUM_CELLS || state.h < constants.NUM_CELLS {
 		state.state = .STATE_SURFACE_ATTACHED
-		fmt.eprintfln("State is to small to safely draw the next frame")
+		fmt.eprintfln("State is too small to safely draw the next frame")
 		return nil
 	}
 
-	pixels := ([^]u32)(state.shm_pool.data)
+	pixels := ([^]u32)(state.vk_buf.data)
+	stride_px := state.vk_buf.stride / 4 // row pitch in u32 (pixel) units
 	p_x_prime := u32(state.pointer.surface_x) * constants.NUM_CELLS / state.w
 	p_y_prime := u32(state.pointer.surface_y) * constants.NUM_CELLS / state.h
 	for y: u32 = 0; y < state.h; y += 1 {
@@ -159,15 +173,19 @@ draw_next_frame :: proc(state: ^state_t) -> Errno {
 				g = u8((x_prime + y_prime) % 2) * 255
 				b = u8((x_prime + y_prime) % 2) * 255
 			}
-			pixels[y * state.w + x] = (u32(r) << 16) | (u32(g) << 8) | u32(b)
+			pixels[y * stride_px + x] = (u32(255) << 24) | (u32(r) << 16) | (u32(g) << 8) | u32(b)
 		}
 	}
 
 	wl_surface.attach(&state.wl_surface, &state.wl_buffer, 0, 0) or_return
 	wl_surface.damage_buffer(&state.wl_surface, 0, 0, i32(state.w), i32(state.h)) or_return
-	wl_surface.commit(&state.wl_surface) or_return
+
+	frame_cb, frame_err := wl_surface.frame(&state.wl_surface)
+	if frame_err != nil do return frame_err
+	register_event_handler(state, frame_cb.id, &wl_callback_handlers, wl_callback.handle_event)
 
 	state.buffer_ready = false
+	wl_surface.commit(&state.wl_surface) or_return
 
 	state.state = .STATE_SURFACE_ATTACHED
 	return nil

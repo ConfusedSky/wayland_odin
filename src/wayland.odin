@@ -32,6 +32,7 @@ main :: proc() {
 run :: proc(state: ^state_t) -> Errno {
 	initialize_display(state) or_return
 	initialize_wl_registry(state) or_return
+	initialize_vulkan(&state.vulkan) or_return
 
 	for !state.cursor.initialized {
 		wayland_handle_messages(state) or_return

@@ -75,7 +75,6 @@ wl_output_handlers := wl_output.EventHandlers {
 		if all_done {
 			data.state.max_w = max_w
 			data.state.max_h = max_h
-			data.state.max_stride = data.state.max_w * constants.COLOR_CHANNELS
 		}
 	},
 }

@@ -259,7 +259,7 @@ generate_interface :: proc(
 	}
 
 	// Proxy type
-	emit_proxy_type(&sb, is_display)
+	emit_proxy_type(&sb, is_display, iface.description)
 
 	// Constructor: init for wl_display, from_global for registry-bound globals
 	if is_display {
@@ -312,8 +312,11 @@ generate_interface :: proc(
 	return true
 }
 
-emit_proxy_type :: proc(sb: ^strings.Builder, is_display: bool) {
+emit_proxy_type :: proc(sb: ^strings.Builder, is_display: bool, desc: Maybe(Description)) {
 	strings.write_byte(sb, '\n')
+	desc_comment := format_description_comment(desc)
+	defer delete(desc_comment)
+	fmt.sbprintf(sb, "%s\n", desc_comment)
 	if is_display {
 		strings.write_string(sb, "t :: struct {\n")
 		strings.write_string(sb, "\tsocket:  linux.Fd,\n")

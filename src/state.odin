@@ -14,6 +14,7 @@ import wl_surface "wayland_protocol/wl_surface"
 import xdg_surface "wayland_protocol/xdg_surface"
 import xdg_toplevel "wayland_protocol/xdg_toplevel"
 import xdg_wm_base "wayland_protocol/xdg_wm_base"
+import zwp_linux_dmabuf_v1 "wayland_protocol/zwp_linux_dmabuf_v1"
 
 state_state_t :: enum {
 	STATE_NONE,
@@ -32,6 +33,7 @@ state_t :: struct {
 	wl_pointer:      wl_pointer.t,
 	pointer:         Pointer,
 	wl_shm:          wl_shm.t,
+	zwp_linux_dmabuf: zwp_linux_dmabuf_v1.t,
 	wl_buffer:       wl_buffer.t,
 	buffer_ready:    bool,
 	xdg_wm_base:     xdg_wm_base.t,
@@ -41,18 +43,17 @@ state_t :: struct {
 	wl_output:       [constants.MAX_OUTPUTS]Output,
 	wl_output_count: int,
 	xdg_toplevel:    xdg_toplevel.t,
-	stride:          u32,
-	max_stride:      u32,
 	w:               u32,
 	max_w:           u32,
 	h:               u32,
 	max_h:           u32,
 	buf_w:           u32,
 	buf_h:           u32,
-	shm_pool:        ShmPool,
+	vk_buf:          VulkanBuffer,
 	state:           state_state_t,
 	event_handlers:  [dynamic]RegisteredEventHandler,
 	last_err:        Errno,
+	vulkan:          VulkanState,
 }
 
 HandleEventProc :: proc(
@@ -123,12 +124,13 @@ find_event_handler :: proc(handlers: []RegisteredEventHandler, object_id: u32) -
 }
 
 cleanup :: proc(state: ^state_t) -> Errno {
+	free_vulkan_buffer(&state.vulkan, &state.vk_buf)
+	cleanup_vulkan(&state.vulkan)
 	for len(state.event_handlers) > 0 {
 		unregister_event_handler(state, state.event_handlers[0].object_id)
 	}
 	delete(state.event_handlers)
 	if state.cursor.initialized do cleanup_cursor(&state.cursor) or_return
-	if state.shm_pool.data != nil do cleanup_wl_shm_pool(&state.shm_pool) or_return
 	wayland_display_connection_cleanup(state.wl_display.socket) or_return
 	return nil
 }

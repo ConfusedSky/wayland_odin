@@ -4,3 +4,4 @@ set -euo pipefail
 odin build ./wayland_gen
 ./wayland_gen.bin /usr/share/wayland/wayland.xml ./src/wayland_protocol/
 ./wayland_gen.bin /usr/share/wayland-protocols/stable/xdg-shell/xdg-shell.xml ./src/wayland_protocol/
+./wayland_gen.bin /usr/share/wayland-protocols/stable/linux-dmabuf/linux-dmabuf-v1.xml ./src/wayland_protocol
