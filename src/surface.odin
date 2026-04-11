@@ -122,6 +122,19 @@ initialize_surface :: proc(state: ^state_t) -> Errno {
 	return nil
 }
 
+initialize_buffer :: proc(state: ^state_t) -> Errno {
+	if state.wl_buffer.id != 0 {
+		wl_buffer.destroy(&state.wl_buffer) or_return
+		// Keep the handler registered until the compositor sends on_release
+	}
+	state.wl_buffer = import_as_wl_buffer(state, &state.vk_buf, state.w, state.h) or_return
+	register_event_handler(state, state.wl_buffer.id, &wl_buffer_handlers, wl_buffer.handle_event)
+	state.buf_w = state.w
+	state.buf_h = state.h
+
+	return nil
+}
+
 draw_next_frame :: proc(state: ^state_t) -> Errno {
 	assert(state.wl_surface.id != 0)
 	assert(state.xdg_surface.id != 0)
@@ -134,21 +147,7 @@ draw_next_frame :: proc(state: ^state_t) -> Errno {
 	fmt.printfln("Drawing next frame")
 
 	if state.w != state.buf_w || state.h != state.buf_h {
-		if state.wl_buffer.id != 0 {
-			wl_buffer.destroy(&state.wl_buffer) or_return
-			// Keep the handler registered until the compositor sends on_release
-		}
-		wl_buf, err := import_as_wl_buffer(state, &state.vk_buf, state.w, state.h)
-		if err != nil do return err
-		state.wl_buffer = wl_buf
-		register_event_handler(
-			state,
-			state.wl_buffer.id,
-			&wl_buffer_handlers,
-			wl_buffer.handle_event,
-		)
-		state.buf_w = state.w
-		state.buf_h = state.h
+		initialize_buffer(state) or_return
 	}
 
 	if state.w < constants.NUM_CELLS || state.h < constants.NUM_CELLS {
@@ -180,8 +179,7 @@ draw_next_frame :: proc(state: ^state_t) -> Errno {
 	wl_surface.attach(&state.wl_surface, &state.wl_buffer, 0, 0) or_return
 	wl_surface.damage_buffer(&state.wl_surface, 0, 0, i32(state.w), i32(state.h)) or_return
 
-	frame_cb, frame_err := wl_surface.frame(&state.wl_surface)
-	if frame_err != nil do return frame_err
+	frame_cb := wl_surface.frame(&state.wl_surface) or_return
 	register_event_handler(state, frame_cb.id, &wl_callback_handlers, wl_callback.handle_event)
 
 	state.buffer_ready = false

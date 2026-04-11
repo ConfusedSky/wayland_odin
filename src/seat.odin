@@ -11,11 +11,11 @@ wl_seat_handlers := wl_seat.EventHandlers {
 		state := (^state_t)(user_data)
 		if .Keyboard in capabilities {
 			err := initialize_keyboard(state)
-			if err != nil { state.last_err = err; return }
+			if err != nil {state.last_err = err; return}
 		}
 		if .Pointer in capabilities {
 			err := initialize_pointer(state)
-			if err != nil { state.last_err = err; return }
+			if err != nil {state.last_err = err; return}
 		}
 	},
 }
