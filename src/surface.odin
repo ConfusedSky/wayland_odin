@@ -108,15 +108,12 @@ initialize_surface :: proc(state: ^state_t) -> Errno {
 	xdg_toplevel.set_min_size(&state.xdg_toplevel, 50, 50) or_return
 	wl_surface.commit(&state.wl_surface) or_return
 
+	initialize_vulkan_pipeline(&state.vulkan) or_return
+	initialize_vulkan_commands(&state.vulkan) or_return
+
 	vk_buf, err := allocate_vulkan_buffer(&state.vulkan, state.max_w, state.max_h)
 	if err != nil do return err
 	state.vk_buf = vk_buf
-
-	map_err := map_vulkan_buffer(&state.vulkan, &state.vk_buf)
-	if map_err != nil {
-		free_vulkan_buffer(&state.vulkan, &state.vk_buf)
-		return map_err
-	}
 
 	state.buffer_ready = true
 	return nil
@@ -139,7 +136,6 @@ draw_next_frame :: proc(state: ^state_t) -> Errno {
 	assert(state.wl_surface.id != 0)
 	assert(state.xdg_surface.id != 0)
 	assert(state.xdg_toplevel.id != 0)
-	assert(state.vk_buf.data != nil)
 	assert(state.vk_buf.memory != 0)
 	assert(state.w > 0 && state.h > 0)
 	assert(state.buffer_ready)
@@ -156,25 +152,12 @@ draw_next_frame :: proc(state: ^state_t) -> Errno {
 		return nil
 	}
 
-	pixels := ([^]u32)(state.vk_buf.data)
-	stride_px := state.vk_buf.stride / 4 // row pitch in u32 (pixel) units
-	p_x_prime := u32(state.pointer.surface_x) * constants.NUM_CELLS / state.w
-	p_y_prime := u32(state.pointer.surface_y) * constants.NUM_CELLS / state.h
-	for y: u32 = 0; y < state.h; y += 1 {
-		for x: u32 = 0; x < state.w; x += 1 {
-			r, g, b: u8
-			x_prime := x * constants.NUM_CELLS / state.w
-			y_prime := y * constants.NUM_CELLS / state.h
-			if p_x_prime == x_prime && p_y_prime == y_prime {
-				r = 255
-			} else {
-				r = u8((x_prime + y_prime) % 2) * 255
-				g = u8((x_prime + y_prime) % 2) * 255
-				b = u8((x_prime + y_prime) % 2) * 255
-			}
-			pixels[y * stride_px + x] = (u32(255) << 24) | (u32(r) << 16) | (u32(g) << 8) | u32(b)
-		}
-	}
+	render_frame(&state.vulkan, &state.vk_buf, RenderParams{
+		width     = state.w,
+		height    = state.h,
+		pointer_x = f32(state.pointer.surface_x),
+		pointer_y = f32(state.pointer.surface_y),
+	}) or_return
 
 	wl_surface.attach(&state.wl_surface, &state.wl_buffer, 0, 0) or_return
 	wl_surface.damage_buffer(&state.wl_surface, 0, 0, i32(state.w), i32(state.h)) or_return

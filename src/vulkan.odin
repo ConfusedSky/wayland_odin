@@ -1,5 +1,6 @@
 package Main
 
+import constants "./constants"
 import "core:c"
 import "core:dynlib"
 import "core:fmt"
@@ -12,12 +13,17 @@ DRM_FORMAT_ARGB8888 :: u32(0x34325241)
 DRM_FORMAT_MOD_LINEAR :: u64(0)
 
 VulkanBuffer :: struct {
+	// LINEAR image: DMA-buf exported to the compositor (written to via vkCmdCopyImage)
 	image:  vk.Image,
 	memory: vk.DeviceMemory,
 	dma_fd: linux.Fd,
 	stride: u32,
 	offset: u32,
-	data:   rawptr, // persistently mapped CPU-visible pointer into memory
+	// OPTIMAL image: GPU render target (rendered into, then copied to the LINEAR image)
+	render_image:      vk.Image,
+	render_memory:     vk.DeviceMemory,
+	render_image_view: vk.ImageView,
+	framebuffer:       vk.Framebuffer,
 }
 
 VulkanState :: struct {
@@ -27,6 +33,21 @@ VulkanState :: struct {
 	device:          vk.Device,
 	graphics_queue:  vk.Queue,
 	graphics_family: u32,
+	render_pass:     vk.RenderPass,
+	vert_shader:     vk.ShaderModule,
+	frag_shader:     vk.ShaderModule,
+	pipeline_layout: vk.PipelineLayout,
+	pipeline:        vk.Pipeline,
+	command_pool:    vk.CommandPool,
+	command_buffer:  vk.CommandBuffer,
+	render_fence:    vk.Fence,
+}
+
+RenderParams :: struct {
+	width:     u32,
+	height:    u32,
+	pointer_x: f32,
+	pointer_y: f32,
 }
 
 VULKAN_DEVICE_EXTENSIONS :: [?]cstring{
@@ -147,17 +168,33 @@ initialize_vulkan :: proc(state: ^VulkanState) -> linux.Errno {
 	return nil
 }
 
-// Allocate a Vulkan image backed by exportable memory and return its DMA-buf FD,
-// stride, and byte offset. Uses linear tiling so the compositor can import it
-// without needing DRM format modifiers, and so the CPU can write pixels directly.
-allocate_vulkan_buffer :: proc(vk_state: ^VulkanState, w: u32, h: u32) -> (result: VulkanBuffer, err: linux.Errno) {
+// Allocate a Vulkan buffer consisting of two images:
+//   - A LINEAR image backed by exportable (DMA-buf) memory, used by the compositor.
+//     The GPU copies rendered pixels into it via vkCmdCopyImage each frame.
+//   - An OPTIMAL device-local image used as the GPU render target.
+//     The render pass draws into this, then its contents are copied to the LINEAR image.
+// This two-image approach is needed because NVIDIA (and some other GPUs) do not support
+// COLOR_ATTACHMENT on LINEAR tiling images.
+allocate_vulkan_buffer :: proc(
+	vk_state: ^VulkanState,
+	w: u32,
+	h: u32,
+) -> (
+	result: VulkanBuffer,
+	err: linux.Errno,
+) {
 	buf: VulkanBuffer
+
+	mem_props: vk.PhysicalDeviceMemoryProperties
+	vk.GetPhysicalDeviceMemoryProperties(vk_state.physical_device, &mem_props)
+
+	// --- LINEAR image (DMA-buf, compositor-visible) ---
 
 	ext_mem_image_info := vk.ExternalMemoryImageCreateInfo{
 		sType       = .EXTERNAL_MEMORY_IMAGE_CREATE_INFO,
 		handleTypes = {.DMA_BUF_EXT},
 	}
-	image_info := vk.ImageCreateInfo{
+	linear_image_info := vk.ImageCreateInfo{
 		sType         = .IMAGE_CREATE_INFO,
 		pNext         = &ext_mem_image_info,
 		imageType     = .D2,
@@ -171,30 +208,27 @@ allocate_vulkan_buffer :: proc(vk_state: ^VulkanState, w: u32, h: u32) -> (resul
 		sharingMode   = .EXCLUSIVE,
 		initialLayout = .UNDEFINED,
 	}
-	if res := vk.CreateImage(vk_state.device, &image_info, nil, &buf.image); res != .SUCCESS {
-		fmt.eprintln("vulkan: vkCreateImage failed:", res)
+	if res := vk.CreateImage(vk_state.device, &linear_image_info, nil, &buf.image);
+	   res != .SUCCESS {
+		fmt.eprintln("vulkan: vkCreateImage (linear) failed:", res)
 		return {}, .EINVAL
 	}
 	defer if err != nil do vk.DestroyImage(vk_state.device, buf.image, nil)
 
-	mem_reqs: vk.MemoryRequirements
-	vk.GetImageMemoryRequirements(vk_state.device, buf.image, &mem_reqs)
+	linear_mem_reqs: vk.MemoryRequirements
+	vk.GetImageMemoryRequirements(vk_state.device, buf.image, &linear_mem_reqs)
 
-	// Find a host-visible memory type compatible with this image.
-	// Host-visible is required for linear tiling and lets the CPU write pixels directly.
-	mem_props: vk.PhysicalDeviceMemoryProperties
-	vk.GetPhysicalDeviceMemoryProperties(vk_state.physical_device, &mem_props)
-
-	mem_type_idx: u32 = max(u32)
+	// Linear images need host-visible memory for DMA-buf export
+	linear_mem_type_idx: u32 = max(u32)
 	for i in 0 ..< mem_props.memoryTypeCount {
-		if mem_reqs.memoryTypeBits & (1 << i) == 0 do continue
+		if linear_mem_reqs.memoryTypeBits & (1 << i) == 0 do continue
 		if .HOST_VISIBLE in mem_props.memoryTypes[i].propertyFlags {
-			mem_type_idx = i
+			linear_mem_type_idx = i
 			break
 		}
 	}
-	if mem_type_idx == max(u32) {
-		fmt.eprintln("vulkan: no host-visible memory type found for buffer")
+	if linear_mem_type_idx == max(u32) {
+		fmt.eprintln("vulkan: no host-visible memory type found for linear image")
 		return {}, .ENOMEM
 	}
 
@@ -202,24 +236,25 @@ allocate_vulkan_buffer :: proc(vk_state: ^VulkanState, w: u32, h: u32) -> (resul
 		sType       = .EXPORT_MEMORY_ALLOCATE_INFO,
 		handleTypes = {.DMA_BUF_EXT},
 	}
-	alloc_info := vk.MemoryAllocateInfo{
+	linear_alloc_info := vk.MemoryAllocateInfo{
 		sType           = .MEMORY_ALLOCATE_INFO,
 		pNext           = &export_alloc_info,
-		allocationSize  = mem_reqs.size,
-		memoryTypeIndex = mem_type_idx,
+		allocationSize  = linear_mem_reqs.size,
+		memoryTypeIndex = linear_mem_type_idx,
 	}
-	if res := vk.AllocateMemory(vk_state.device, &alloc_info, nil, &buf.memory); res != .SUCCESS {
-		fmt.eprintln("vulkan: vkAllocateMemory failed:", res)
+	if res := vk.AllocateMemory(vk_state.device, &linear_alloc_info, nil, &buf.memory);
+	   res != .SUCCESS {
+		fmt.eprintln("vulkan: vkAllocateMemory (linear) failed:", res)
 		return {}, .ENOMEM
 	}
 	defer if err != nil do vk.FreeMemory(vk_state.device, buf.memory, nil)
 
 	if res := vk.BindImageMemory(vk_state.device, buf.image, buf.memory, 0); res != .SUCCESS {
-		fmt.eprintln("vulkan: vkBindImageMemory failed:", res)
+		fmt.eprintln("vulkan: vkBindImageMemory (linear) failed:", res)
 		return {}, .EINVAL
 	}
 
-	// Export the backing memory as a DMA-buf fd
+	// Export the linear image's backing memory as a DMA-buf fd
 	fd_info := vk.MemoryGetFdInfoKHR{
 		sType      = .MEMORY_GET_FD_INFO_KHR,
 		memory     = buf.memory,
@@ -244,22 +279,557 @@ allocate_vulkan_buffer :: proc(vk_state: ^VulkanState, w: u32, h: u32) -> (resul
 	buf.stride = u32(layout.rowPitch)
 	buf.offset = u32(layout.offset)
 
-	fmt.printfln("vulkan: buffer allocated — stride=%v offset=%v fd=%v", buf.stride, buf.offset, buf.dma_fd)
+	// --- OPTIMAL image (GPU render target) ---
+
+	render_image_info := vk.ImageCreateInfo{
+		sType         = .IMAGE_CREATE_INFO,
+		imageType     = .D2,
+		format        = .B8G8R8A8_UNORM,
+		extent        = {width = w, height = h, depth = 1},
+		mipLevels     = 1,
+		arrayLayers   = 1,
+		samples       = {._1},
+		tiling        = .OPTIMAL,
+		usage         = {.COLOR_ATTACHMENT, .TRANSFER_SRC},
+		sharingMode   = .EXCLUSIVE,
+		initialLayout = .UNDEFINED,
+	}
+	if res := vk.CreateImage(vk_state.device, &render_image_info, nil, &buf.render_image);
+	   res != .SUCCESS {
+		fmt.eprintln("vulkan: vkCreateImage (render) failed:", res)
+		return {}, .EINVAL
+	}
+	defer if err != nil do vk.DestroyImage(vk_state.device, buf.render_image, nil)
+
+	render_mem_reqs: vk.MemoryRequirements
+	vk.GetImageMemoryRequirements(vk_state.device, buf.render_image, &render_mem_reqs)
+
+	// Prefer device-local memory for the render target; fall back to any compatible type
+	render_mem_type_idx: u32 = max(u32)
+	for i in 0 ..< mem_props.memoryTypeCount {
+		if render_mem_reqs.memoryTypeBits & (1 << i) == 0 do continue
+		if .DEVICE_LOCAL in mem_props.memoryTypes[i].propertyFlags {
+			render_mem_type_idx = i
+			break
+		}
+	}
+	if render_mem_type_idx == max(u32) {
+		for i in 0 ..< mem_props.memoryTypeCount {
+			if render_mem_reqs.memoryTypeBits & (1 << i) != 0 {
+				render_mem_type_idx = i
+				break
+			}
+		}
+	}
+	if render_mem_type_idx == max(u32) {
+		fmt.eprintln("vulkan: no compatible memory type found for render image")
+		return {}, .ENOMEM
+	}
+
+	render_alloc_info := vk.MemoryAllocateInfo{
+		sType           = .MEMORY_ALLOCATE_INFO,
+		allocationSize  = render_mem_reqs.size,
+		memoryTypeIndex = render_mem_type_idx,
+	}
+	if res := vk.AllocateMemory(vk_state.device, &render_alloc_info, nil, &buf.render_memory);
+	   res != .SUCCESS {
+		fmt.eprintln("vulkan: vkAllocateMemory (render) failed:", res)
+		return {}, .ENOMEM
+	}
+	defer if err != nil do vk.FreeMemory(vk_state.device, buf.render_memory, nil)
+
+	if res := vk.BindImageMemory(vk_state.device, buf.render_image, buf.render_memory, 0);
+	   res != .SUCCESS {
+		fmt.eprintln("vulkan: vkBindImageMemory (render) failed:", res)
+		return {}, .EINVAL
+	}
+
+	// Image view for the OPTIMAL render target — attached to the framebuffer
+	view_info := vk.ImageViewCreateInfo{
+		sType    = .IMAGE_VIEW_CREATE_INFO,
+		image    = buf.render_image,
+		viewType = .D2,
+		format   = .B8G8R8A8_UNORM,
+		subresourceRange = vk.ImageSubresourceRange{
+			aspectMask     = {.COLOR},
+			baseMipLevel   = 0,
+			levelCount     = 1,
+			baseArrayLayer = 0,
+			layerCount     = 1,
+		},
+	}
+	if res := vk.CreateImageView(vk_state.device, &view_info, nil, &buf.render_image_view);
+	   res != .SUCCESS {
+		fmt.eprintln("vulkan: vkCreateImageView failed:", res)
+		return {}, .EINVAL
+	}
+	defer if err != nil do vk.DestroyImageView(vk_state.device, buf.render_image_view, nil)
+
+	// Framebuffer — wraps the OPTIMAL image view for use with the render pass
+	fb_info := vk.FramebufferCreateInfo{
+		sType           = .FRAMEBUFFER_CREATE_INFO,
+		renderPass      = vk_state.render_pass,
+		attachmentCount = 1,
+		pAttachments    = &buf.render_image_view,
+		width           = w,
+		height          = h,
+		layers          = 1,
+	}
+	if res := vk.CreateFramebuffer(vk_state.device, &fb_info, nil, &buf.framebuffer);
+	   res != .SUCCESS {
+		fmt.eprintln("vulkan: vkCreateFramebuffer failed:", res)
+		return {}, .EINVAL
+	}
+
+	fmt.printfln(
+		"vulkan: buffer allocated — stride=%v offset=%v fd=%v",
+		buf.stride,
+		buf.offset,
+		buf.dma_fd,
+	)
 	return buf, nil
 }
 
-map_vulkan_buffer :: proc(vk_state: ^VulkanState, buf: ^VulkanBuffer) -> linux.Errno {
-	if res := vk.MapMemory(vk_state.device, buf.memory, 0, vk.DeviceSize(vk.WHOLE_SIZE), {}, &buf.data); res != .SUCCESS {
-		fmt.eprintln("vulkan: vkMapMemory failed:", res)
+// initialize_vulkan_pipeline creates the render pass, shader modules, pipeline layout,
+// and graphics pipeline. Call this once after initialize_vulkan and before any
+// allocate_vulkan_buffer calls (the framebuffer needs render_pass to exist).
+initialize_vulkan_pipeline :: proc(state: ^VulkanState) -> linux.Errno {
+	// Render pass — single color attachment, clear on load, store on done.
+	// initialLayout UNDEFINED means we don't care about prior contents (we clear anyway).
+	// finalLayout GENERAL is required for linear DMA-buf images used by the compositor.
+	color_attachment := vk.AttachmentDescription{
+		format         = .B8G8R8A8_UNORM,
+		samples         = {._1},
+		loadOp         = .CLEAR,
+		storeOp        = .STORE,
+		stencilLoadOp  = .DONT_CARE,
+		stencilStoreOp = .DONT_CARE,
+		initialLayout  = .UNDEFINED,
+		finalLayout    = .GENERAL,
+	}
+	color_attachment_ref := vk.AttachmentReference{
+		attachment = 0,
+		layout     = .COLOR_ATTACHMENT_OPTIMAL,
+	}
+	subpass := vk.SubpassDescription{
+		pipelineBindPoint    = .GRAPHICS,
+		colorAttachmentCount = 1,
+		pColorAttachments    = &color_attachment_ref,
+	}
+	// Subpass dependency: wait for color attachment output before writing.
+	dependency := vk.SubpassDependency{
+		srcSubpass    = vk.SUBPASS_EXTERNAL,
+		dstSubpass    = 0,
+		srcStageMask  = {.COLOR_ATTACHMENT_OUTPUT},
+		dstStageMask  = {.COLOR_ATTACHMENT_OUTPUT},
+		srcAccessMask = {},
+		dstAccessMask = {.COLOR_ATTACHMENT_WRITE},
+	}
+	render_pass_info := vk.RenderPassCreateInfo{
+		sType           = .RENDER_PASS_CREATE_INFO,
+		attachmentCount = 1,
+		pAttachments    = &color_attachment,
+		subpassCount    = 1,
+		pSubpasses      = &subpass,
+		dependencyCount = 1,
+		pDependencies   = &dependency,
+	}
+	if res := vk.CreateRenderPass(state.device, &render_pass_info, nil, &state.render_pass);
+	   res != .SUCCESS {
+		fmt.eprintln("vulkan: vkCreateRenderPass failed:", res)
 		return .EINVAL
 	}
+
+	// Shader modules — SPIR-V embedded at compile time via #load
+	vert_spv := #load("shaders/grid.vert.spv")
+	frag_spv := #load("shaders/grid.frag.spv")
+
+	vert_info := vk.ShaderModuleCreateInfo{
+		sType    = .SHADER_MODULE_CREATE_INFO,
+		codeSize = len(vert_spv),
+		pCode    = cast([^]u32)raw_data(vert_spv),
+	}
+	if res := vk.CreateShaderModule(state.device, &vert_info, nil, &state.vert_shader);
+	   res != .SUCCESS {
+		fmt.eprintln("vulkan: vkCreateShaderModule (vert) failed:", res)
+		return .EINVAL
+	}
+
+	frag_info := vk.ShaderModuleCreateInfo{
+		sType    = .SHADER_MODULE_CREATE_INFO,
+		codeSize = len(frag_spv),
+		pCode    = cast([^]u32)raw_data(frag_spv),
+	}
+	if res := vk.CreateShaderModule(state.device, &frag_info, nil, &state.frag_shader);
+	   res != .SUCCESS {
+		fmt.eprintln("vulkan: vkCreateShaderModule (frag) failed:", res)
+		return .EINVAL
+	}
+
+	// Push constant range: 5 × f32 (surface_width, surface_height, pointer_x, pointer_y, num_cells)
+	push_constant_range := vk.PushConstantRange{
+		stageFlags = {.FRAGMENT},
+		offset     = 0,
+		size       = 5 * size_of(f32),
+	}
+	layout_info := vk.PipelineLayoutCreateInfo{
+		sType                  = .PIPELINE_LAYOUT_CREATE_INFO,
+		pushConstantRangeCount = 1,
+		pPushConstantRanges    = &push_constant_range,
+	}
+	if res := vk.CreatePipelineLayout(state.device, &layout_info, nil, &state.pipeline_layout);
+	   res != .SUCCESS {
+		fmt.eprintln("vulkan: vkCreatePipelineLayout failed:", res)
+		return .EINVAL
+	}
+
+	// Graphics pipeline
+	shader_stages := [2]vk.PipelineShaderStageCreateInfo{
+		{
+			sType  = .PIPELINE_SHADER_STAGE_CREATE_INFO,
+			stage  = {.VERTEX},
+			module = state.vert_shader,
+			pName  = "main",
+		},
+		{
+			sType  = .PIPELINE_SHADER_STAGE_CREATE_INFO,
+			stage  = {.FRAGMENT},
+			module = state.frag_shader,
+			pName  = "main",
+		},
+	}
+
+	// No vertex buffer — the vertex shader generates positions from gl_VertexIndex
+	vertex_input_info := vk.PipelineVertexInputStateCreateInfo{
+		sType = .PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO,
+	}
+
+	input_assembly := vk.PipelineInputAssemblyStateCreateInfo{
+		sType    = .PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO,
+		topology = .TRIANGLE_LIST,
+	}
+
+	// Viewport and scissor are set dynamically each frame so the pipeline
+	// doesn't need to be recreated on window resize.
+	dynamic_states := [2]vk.DynamicState{.VIEWPORT, .SCISSOR}
+	dynamic_state_info := vk.PipelineDynamicStateCreateInfo{
+		sType             = .PIPELINE_DYNAMIC_STATE_CREATE_INFO,
+		dynamicStateCount = u32(len(dynamic_states)),
+		pDynamicStates    = &dynamic_states[0],
+	}
+
+	viewport_state := vk.PipelineViewportStateCreateInfo{
+		sType         = .PIPELINE_VIEWPORT_STATE_CREATE_INFO,
+		viewportCount = 1,
+		scissorCount  = 1,
+	}
+
+	rasterizer := vk.PipelineRasterizationStateCreateInfo{
+		sType       = .PIPELINE_RASTERIZATION_STATE_CREATE_INFO,
+		polygonMode = .FILL,
+		cullMode    = {},
+		frontFace   = .CLOCKWISE,
+		lineWidth   = 1.0,
+	}
+
+	multisample := vk.PipelineMultisampleStateCreateInfo{
+		sType                = .PIPELINE_MULTISAMPLE_STATE_CREATE_INFO,
+		rasterizationSamples = {._1},
+	}
+
+	// Opaque blending — alpha channel is always 255, no transparency needed
+	color_blend_attachment := vk.PipelineColorBlendAttachmentState{
+		colorWriteMask = {.R, .G, .B, .A},
+	}
+	color_blending := vk.PipelineColorBlendStateCreateInfo{
+		sType           = .PIPELINE_COLOR_BLEND_STATE_CREATE_INFO,
+		attachmentCount = 1,
+		pAttachments    = &color_blend_attachment,
+	}
+
+	pipeline_info := vk.GraphicsPipelineCreateInfo{
+		sType               = .GRAPHICS_PIPELINE_CREATE_INFO,
+		stageCount          = u32(len(shader_stages)),
+		pStages             = &shader_stages[0],
+		pVertexInputState   = &vertex_input_info,
+		pInputAssemblyState = &input_assembly,
+		pViewportState      = &viewport_state,
+		pRasterizationState = &rasterizer,
+		pMultisampleState   = &multisample,
+		pColorBlendState    = &color_blending,
+		pDynamicState       = &dynamic_state_info,
+		layout              = state.pipeline_layout,
+		renderPass          = state.render_pass,
+		subpass             = 0,
+	}
+	if res := vk.CreateGraphicsPipelines(
+		state.device,
+		0,
+		1,
+		&pipeline_info,
+		nil,
+		&state.pipeline,
+	); res != .SUCCESS {
+		fmt.eprintln("vulkan: vkCreateGraphicsPipelines failed:", res)
+		return .EINVAL
+	}
+
+	fmt.printfln("vulkan: pipeline ready")
+	return nil
+}
+
+// initialize_vulkan_commands creates the command pool, allocates a command buffer,
+// and creates a fence (pre-signalled so the first vkWaitForFences call passes immediately).
+initialize_vulkan_commands :: proc(state: ^VulkanState) -> linux.Errno {
+	pool_info := vk.CommandPoolCreateInfo{
+		sType            = .COMMAND_POOL_CREATE_INFO,
+		flags            = {.RESET_COMMAND_BUFFER},
+		queueFamilyIndex = state.graphics_family,
+	}
+	if res := vk.CreateCommandPool(state.device, &pool_info, nil, &state.command_pool);
+	   res != .SUCCESS {
+		fmt.eprintln("vulkan: vkCreateCommandPool failed:", res)
+		return .EINVAL
+	}
+
+	alloc_info := vk.CommandBufferAllocateInfo{
+		sType              = .COMMAND_BUFFER_ALLOCATE_INFO,
+		commandPool        = state.command_pool,
+		level              = .PRIMARY,
+		commandBufferCount = 1,
+	}
+	if res := vk.AllocateCommandBuffers(state.device, &alloc_info, &state.command_buffer);
+	   res != .SUCCESS {
+		fmt.eprintln("vulkan: vkAllocateCommandBuffers failed:", res)
+		return .EINVAL
+	}
+
+	// Pre-signal the fence so the first render_frame wait passes without blocking.
+	fence_info := vk.FenceCreateInfo{
+		sType = .FENCE_CREATE_INFO,
+		flags = {.SIGNALED},
+	}
+	if res := vk.CreateFence(state.device, &fence_info, nil, &state.render_fence);
+	   res != .SUCCESS {
+		fmt.eprintln("vulkan: vkCreateFence failed:", res)
+		return .EINVAL
+	}
+
+	fmt.printfln("vulkan: command buffer and fence ready")
+	return nil
+}
+
+// render_frame records and submits a draw command for one frame, then CPU-waits for
+// the GPU to finish before returning. This ensures the DMA-buf image is fully written
+// before the compositor reads it.
+render_frame :: proc(
+	vk_state: ^VulkanState,
+	buf: ^VulkanBuffer,
+	params: RenderParams,
+) -> linux.Errno {
+	// Wait for the previous frame's GPU work to complete, then reset the fence.
+	if res := vk.WaitForFences(vk_state.device, 1, &vk_state.render_fence, true, max(u64));
+	   res != .SUCCESS {
+		fmt.eprintln("vulkan: vkWaitForFences failed:", res)
+		return .EINVAL
+	}
+	if res := vk.ResetFences(vk_state.device, 1, &vk_state.render_fence); res != .SUCCESS {
+		fmt.eprintln("vulkan: vkResetFences failed:", res)
+		return .EINVAL
+	}
+
+	if res := vk.ResetCommandBuffer(vk_state.command_buffer, {}); res != .SUCCESS {
+		fmt.eprintln("vulkan: vkResetCommandBuffer failed:", res)
+		return .EINVAL
+	}
+
+	begin_info := vk.CommandBufferBeginInfo{
+		sType = .COMMAND_BUFFER_BEGIN_INFO,
+		flags = {.ONE_TIME_SUBMIT},
+	}
+	if res := vk.BeginCommandBuffer(vk_state.command_buffer, &begin_info); res != .SUCCESS {
+		fmt.eprintln("vulkan: vkBeginCommandBuffer failed:", res)
+		return .EINVAL
+	}
+
+	clear_value := vk.ClearValue{color = {float32 = {0, 0, 0, 1}}}
+	render_pass_begin := vk.RenderPassBeginInfo{
+		sType       = .RENDER_PASS_BEGIN_INFO,
+		renderPass  = vk_state.render_pass,
+		framebuffer = buf.framebuffer,
+		renderArea  = vk.Rect2D{extent = {width = params.width, height = params.height}},
+		clearValueCount = 1,
+		pClearValues    = &clear_value,
+	}
+	vk.CmdBeginRenderPass(vk_state.command_buffer, &render_pass_begin, .INLINE)
+
+	vk.CmdBindPipeline(vk_state.command_buffer, .GRAPHICS, vk_state.pipeline)
+
+	// Dynamic viewport and scissor — adjusted to the current window size each frame
+	viewport := vk.Viewport{
+		x        = 0,
+		y        = 0,
+		width    = f32(params.width),
+		height   = f32(params.height),
+		minDepth = 0,
+		maxDepth = 1,
+	}
+	vk.CmdSetViewport(vk_state.command_buffer, 0, 1, &viewport)
+
+	scissor := vk.Rect2D{extent = {width = params.width, height = params.height}}
+	vk.CmdSetScissor(vk_state.command_buffer, 0, 1, &scissor)
+
+	// Push constants: surface_width, surface_height, pointer_x, pointer_y, num_cells
+	push_data := [5]f32{
+		f32(params.width),
+		f32(params.height),
+		params.pointer_x,
+		params.pointer_y,
+		f32(constants.NUM_CELLS),
+	}
+	vk.CmdPushConstants(
+		vk_state.command_buffer,
+		vk_state.pipeline_layout,
+		{.FRAGMENT},
+		0,
+		u32(size_of(push_data)),
+		&push_data,
+	)
+
+	// 3 vertices → full-screen triangle; no vertex buffer
+	vk.CmdDraw(vk_state.command_buffer, 3, 1, 0, 0)
+
+	vk.CmdEndRenderPass(vk_state.command_buffer)
+
+	// After the render pass, the OPTIMAL image is in COLOR_ATTACHMENT_OPTIMAL layout.
+	// We need to:
+	//   1. Transition OPTIMAL image → TRANSFER_SRC_OPTIMAL  (copy source)
+	//   2. Transition LINEAR image  → GENERAL               (copy destination)
+	//   3. Copy OPTIMAL → LINEAR
+	//   4. Barrier on LINEAR to ensure the write is visible before the compositor reads it
+
+	full_subresource_range := vk.ImageSubresourceRange{
+		aspectMask     = {.COLOR},
+		baseMipLevel   = 0,
+		levelCount     = 1,
+		baseArrayLayer = 0,
+		layerCount     = 1,
+	}
+
+	pre_copy_barriers := [2]vk.ImageMemoryBarrier{
+		// OPTIMAL render target: COLOR_ATTACHMENT_OPTIMAL → TRANSFER_SRC_OPTIMAL
+		{
+			sType               = .IMAGE_MEMORY_BARRIER,
+			srcAccessMask       = {.COLOR_ATTACHMENT_WRITE},
+			dstAccessMask       = {.TRANSFER_READ},
+			oldLayout           = .COLOR_ATTACHMENT_OPTIMAL,
+			newLayout           = .TRANSFER_SRC_OPTIMAL,
+			srcQueueFamilyIndex = vk.QUEUE_FAMILY_IGNORED,
+			dstQueueFamilyIndex = vk.QUEUE_FAMILY_IGNORED,
+			image               = buf.render_image,
+			subresourceRange    = full_subresource_range,
+		},
+		// LINEAR DMA-buf image: UNDEFINED → GENERAL
+		// UNDEFINED as oldLayout is valid even if the image is in GENERAL from a prior frame —
+		// it tells Vulkan we don't need the old content preserved (we overwrite everything).
+		{
+			sType               = .IMAGE_MEMORY_BARRIER,
+			srcAccessMask       = {},
+			dstAccessMask       = {.TRANSFER_WRITE},
+			oldLayout           = .UNDEFINED,
+			newLayout           = .GENERAL,
+			srcQueueFamilyIndex = vk.QUEUE_FAMILY_IGNORED,
+			dstQueueFamilyIndex = vk.QUEUE_FAMILY_IGNORED,
+			image               = buf.image,
+			subresourceRange    = full_subresource_range,
+		},
+	}
+	vk.CmdPipelineBarrier(
+		vk_state.command_buffer,
+		{.COLOR_ATTACHMENT_OUTPUT},
+		{.TRANSFER},
+		{},
+		0, nil,
+		0, nil,
+		u32(len(pre_copy_barriers)), &pre_copy_barriers[0],
+	)
+
+	copy_region := vk.ImageCopy{
+		srcSubresource = {aspectMask = {.COLOR}, mipLevel = 0, baseArrayLayer = 0, layerCount = 1},
+		dstSubresource = {aspectMask = {.COLOR}, mipLevel = 0, baseArrayLayer = 0, layerCount = 1},
+		extent         = {width = params.width, height = params.height, depth = 1},
+	}
+	vk.CmdCopyImage(
+		vk_state.command_buffer,
+		buf.render_image, .TRANSFER_SRC_OPTIMAL,
+		buf.image, .GENERAL,
+		1, &copy_region,
+	)
+
+	// Ensure the copy write is visible before the compositor reads the DMA-buf
+	post_copy_barrier := vk.ImageMemoryBarrier{
+		sType               = .IMAGE_MEMORY_BARRIER,
+		srcAccessMask       = {.TRANSFER_WRITE},
+		dstAccessMask       = {.MEMORY_READ},
+		oldLayout           = .GENERAL,
+		newLayout           = .GENERAL,
+		srcQueueFamilyIndex = vk.QUEUE_FAMILY_IGNORED,
+		dstQueueFamilyIndex = vk.QUEUE_FAMILY_IGNORED,
+		image               = buf.image,
+		subresourceRange    = full_subresource_range,
+	}
+	vk.CmdPipelineBarrier(
+		vk_state.command_buffer,
+		{.TRANSFER},
+		{.BOTTOM_OF_PIPE},
+		{},
+		0, nil,
+		0, nil,
+		1, &post_copy_barrier,
+	)
+
+	if res := vk.EndCommandBuffer(vk_state.command_buffer); res != .SUCCESS {
+		fmt.eprintln("vulkan: vkEndCommandBuffer failed:", res)
+		return .EINVAL
+	}
+
+	submit_info := vk.SubmitInfo{
+		sType                = .SUBMIT_INFO,
+		commandBufferCount   = 1,
+		pCommandBuffers      = &vk_state.command_buffer,
+	}
+	if res := vk.QueueSubmit(vk_state.graphics_queue, 1, &submit_info, vk_state.render_fence);
+	   res != .SUCCESS {
+		fmt.eprintln("vulkan: vkQueueSubmit failed:", res)
+		return .EINVAL
+	}
+
+	// CPU-wait for the GPU to finish writing before the compositor reads the DMA-buf.
+	if res := vk.WaitForFences(vk_state.device, 1, &vk_state.render_fence, true, max(u64));
+	   res != .SUCCESS {
+		fmt.eprintln("vulkan: vkWaitForFences (post-submit) failed:", res)
+		return .EINVAL
+	}
+
 	return nil
 }
 
 free_vulkan_buffer :: proc(vk_state: ^VulkanState, buf: ^VulkanBuffer) {
-	if buf.data != nil {
-		vk.UnmapMemory(vk_state.device, buf.memory)
-		buf.data = nil
+	if buf.framebuffer != 0 {
+		vk.DestroyFramebuffer(vk_state.device, buf.framebuffer, nil)
+		buf.framebuffer = 0
+	}
+	if buf.render_image_view != 0 {
+		vk.DestroyImageView(vk_state.device, buf.render_image_view, nil)
+		buf.render_image_view = 0
+	}
+	if buf.render_image != 0 {
+		vk.DestroyImage(vk_state.device, buf.render_image, nil)
+		buf.render_image = 0
+	}
+	if buf.render_memory != 0 {
+		vk.FreeMemory(vk_state.device, buf.render_memory, nil)
+		buf.render_memory = 0
 	}
 	if buf.dma_fd > 0 {
 		linux.close(buf.dma_fd)
@@ -278,6 +848,34 @@ free_vulkan_buffer :: proc(vk_state: ^VulkanState, buf: ^VulkanBuffer) {
 cleanup_vulkan :: proc(state: ^VulkanState) {
 	if state.device != nil {
 		vk.DeviceWaitIdle(state.device)
+		if state.render_fence != 0 {
+			vk.DestroyFence(state.device, state.render_fence, nil)
+			state.render_fence = 0
+		}
+		if state.command_pool != 0 {
+			vk.DestroyCommandPool(state.device, state.command_pool, nil)
+			state.command_pool = 0
+		}
+		if state.pipeline != 0 {
+			vk.DestroyPipeline(state.device, state.pipeline, nil)
+			state.pipeline = 0
+		}
+		if state.pipeline_layout != 0 {
+			vk.DestroyPipelineLayout(state.device, state.pipeline_layout, nil)
+			state.pipeline_layout = 0
+		}
+		if state.frag_shader != 0 {
+			vk.DestroyShaderModule(state.device, state.frag_shader, nil)
+			state.frag_shader = 0
+		}
+		if state.vert_shader != 0 {
+			vk.DestroyShaderModule(state.device, state.vert_shader, nil)
+			state.vert_shader = 0
+		}
+		if state.render_pass != 0 {
+			vk.DestroyRenderPass(state.device, state.render_pass, nil)
+			state.render_pass = 0
+		}
 		vk.DestroyDevice(state.device, nil)
 		state.device = nil
 	}

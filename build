@@ -1,3 +1,6 @@
 #!/bin/env bash
 
+glslc src/shaders/grid.vert -o src/shaders/grid.vert.spv
+glslc src/shaders/grid.frag -o src/shaders/grid.frag.spv
+
 odin build ./src -debug -o:none -out:odin
