@@ -2,3 +2,4 @@ odin
 wayland_gen.bin
 
 src/wayland_protocol/
+**/**.spv
