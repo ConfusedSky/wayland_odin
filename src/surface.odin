@@ -3,6 +3,7 @@ package Main
 import constants "./constants"
 import renderer "./renderer"
 import "core:fmt"
+import "core:math"
 import wl_buffer "wayland_protocol/wl_buffer"
 import wl_callback "wayland_protocol/wl_callback"
 import wl_compositor "wayland_protocol/wl_compositor"
@@ -179,7 +180,15 @@ draw_next_frame :: proc(state: ^state_t) -> Errno {
 	)
 
 	renderer.draw_rect(&state.vulkan, {200, 320}, {80, 40}, {0.3, 0.8, 0.3, 1}, {1, 1, 0, 1}, 4)
-	renderer.draw_rect(&state.vulkan, {340, 320}, {60, 60}, {0.8, 0.3, 0.8, 0.5}, {1, 1, 1, 1}, 4)
+	renderer.draw_rect(
+		&state.vulkan,
+		{340, 320},
+		{60, 60},
+		{0.8, 0.3, 0.8, 0.5},
+		{1, 1, 1, 1},
+		4,
+		math.PI / 4,
+	)
 
 	renderer.draw_rounded_rect(
 		&state.vulkan,

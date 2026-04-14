@@ -7,6 +7,7 @@ layout(location = 3) flat in vec2  v_p2;
 layout(location = 4) flat in vec4  v_fill_color;
 layout(location = 5) flat in vec4  v_border_color;
 layout(location = 6) flat in float v_border_width;
+layout(location = 7) flat in float v_angle;
 
 layout(location = 0) out vec4 out_color;
 
@@ -116,6 +117,24 @@ float sdf_circle(vec2 p, vec2 center, float r) {
 
 void main() {
     vec2 pixel = gl_FragCoord.xy;
+
+    // Rotate the sample point around the shape's pivot by -angle, which is
+    // equivalent to rotating the shape itself by +angle in screen space.
+    if (v_angle != 0.0) {
+        int stype_pivot = int(round(v_shape_type));
+        vec2 pivot;
+        if (stype_pivot == 0) {
+            pivot = (v_p0 + v_p1) * 0.5;           // line: midpoint
+        } else if (stype_pivot == 3) {
+            pivot = (v_p0 + v_p1 + v_p2) / 3.0;    // triangle: centroid
+        } else {
+            pivot = v_p0;                            // rect/rounded_rect/oval/circle: center
+        }
+        float c = cos(-v_angle);
+        float s = sin(-v_angle);
+        vec2 d = pixel - pivot;
+        pixel = pivot + vec2(d.x*c - d.y*s, d.x*s + d.y*c);
+    }
 
     float d;
     int stype = int(round(v_shape_type));

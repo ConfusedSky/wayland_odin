@@ -17,6 +17,7 @@ layout(location = 4) in vec2 p2;
 layout(location = 5) in vec4 fill_color;
 layout(location = 6) in vec4 border_color;
 layout(location = 7) in float border_width;
+layout(location = 8) in float angle;
 
 layout(location = 0) flat out float v_shape_type;
 layout(location = 1) flat out vec2  v_p0;
@@ -25,6 +26,7 @@ layout(location = 3) flat out vec2  v_p2;
 layout(location = 4) flat out vec4  v_fill_color;
 layout(location = 5) flat out vec4  v_border_color;
 layout(location = 6) flat out float v_border_width;
+layout(location = 7) flat out float v_angle;
 
 void main() {
     // Convert screen-pixel position to NDC.
@@ -40,4 +42,5 @@ void main() {
     v_fill_color   = fill_color;
     v_border_color = border_color;
     v_border_width = border_width;
+    v_angle        = angle;
 }

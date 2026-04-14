@@ -1,6 +1,7 @@
 package renderer
 
 import "core:fmt"
+import "core:math/linalg"
 import "core:mem"
 import "core:sys/linux"
 import vk "vendor:vulkan"
@@ -24,7 +25,7 @@ ShapeType :: enum int {
 	Circle      = 5,
 }
 
-// 64 bytes, 16 × f32.
+// 76 bytes, 19 × f32.
 // All fields except pos carry the same value for all 4 vertices of a quad —
 // they are declared `flat` in the shaders (no interpolation).
 ShapeVertex :: struct #packed {
@@ -36,6 +37,7 @@ ShapeVertex :: struct #packed {
 	fill_color:   [4]f32,
 	border_color: [4]f32,
 	border_width: f32,
+	angle:        f32,    // rotation in radians (counter-clockwise)
 }
 
 ShapeRenderer :: struct {
@@ -187,20 +189,29 @@ draw_line :: proc(
 	fill_color:   [4]f32,
 	border_color: [4]f32,
 	border_width: f32,
+	angle:        f32 = 0,
 ) {
-	// AABB of the capsule, expanded by 1px for AA
 	pad := half_width + border_width + 1
-	min_x := min(p0.x, p1.x) - pad
-	min_y := min(p0.y, p1.y) - pad
-	max_x := max(p0.x, p1.x) + pad
-	max_y := max(p0.y, p1.y) + pad
-	append_quad(
-		state,
-		min_x, min_y, max_x, max_y,
-		f32(int(ShapeType.Line)),
-		p0, p1, {half_width, f32(int(cap))},
-		fill_color, border_color, border_width,
-	)
+	pivot := (p0 + p1) * 0.5
+	if angle != 0 {
+		r := linalg.length(p1 - p0) * 0.5 + pad
+		append_quad(
+			state,
+			pivot.x - r, pivot.y - r, pivot.x + r, pivot.y + r,
+			f32(int(ShapeType.Line)),
+			p0, p1, {half_width, f32(int(cap))},
+			fill_color, border_color, border_width, angle,
+		)
+	} else {
+		append_quad(
+			state,
+			min(p0.x, p1.x) - pad, min(p0.y, p1.y) - pad,
+			max(p0.x, p1.x) + pad, max(p0.y, p1.y) + pad,
+			f32(int(ShapeType.Line)),
+			p0, p1, {half_width, f32(int(cap))},
+			fill_color, border_color, border_width, 0,
+		)
+	}
 }
 
 draw_rect :: proc(
@@ -210,18 +221,28 @@ draw_rect :: proc(
 	fill_color:   [4]f32,
 	border_color: [4]f32,
 	border_width: f32,
+	angle:        f32 = 0,
 ) {
-	pad := f32(1) // 1px AA only — border is inset
-	append_quad(
-		state,
-		center.x - half_size.x - pad,
-		center.y - half_size.y - pad,
-		center.x + half_size.x + pad,
-		center.y + half_size.y + pad,
-		f32(int(ShapeType.Rect)),
-		center, half_size, {},
-		fill_color, border_color, border_width,
-	)
+	pad := f32(1)
+	if angle != 0 {
+		r := linalg.length(half_size) + border_width + pad
+		append_quad(
+			state,
+			center.x - r, center.y - r, center.x + r, center.y + r,
+			f32(int(ShapeType.Rect)),
+			center, half_size, {},
+			fill_color, border_color, border_width, angle,
+		)
+	} else {
+		append_quad(
+			state,
+			center.x - half_size.x - pad, center.y - half_size.y - pad,
+			center.x + half_size.x + pad, center.y + half_size.y + pad,
+			f32(int(ShapeType.Rect)),
+			center, half_size, {},
+			fill_color, border_color, border_width, 0,
+		)
+	}
 }
 
 draw_rounded_rect :: proc(
@@ -232,18 +253,28 @@ draw_rounded_rect :: proc(
 	fill_color:    [4]f32,
 	border_color:  [4]f32,
 	border_width:  f32,
+	angle:         f32 = 0,
 ) {
 	pad := f32(1)
-	append_quad(
-		state,
-		center.x - half_size.x - pad,
-		center.y - half_size.y - pad,
-		center.x + half_size.x + pad,
-		center.y + half_size.y + pad,
-		f32(int(ShapeType.RoundedRect)),
-		center, half_size, {corner_radius, 0},
-		fill_color, border_color, border_width,
-	)
+	if angle != 0 {
+		r := linalg.length(half_size) + border_width + pad
+		append_quad(
+			state,
+			center.x - r, center.y - r, center.x + r, center.y + r,
+			f32(int(ShapeType.RoundedRect)),
+			center, half_size, {corner_radius, 0},
+			fill_color, border_color, border_width, angle,
+		)
+	} else {
+		append_quad(
+			state,
+			center.x - half_size.x - pad, center.y - half_size.y - pad,
+			center.x + half_size.x + pad, center.y + half_size.y + pad,
+			f32(int(ShapeType.RoundedRect)),
+			center, half_size, {corner_radius, 0},
+			fill_color, border_color, border_width, 0,
+		)
+	}
 }
 
 draw_triangle :: proc(
@@ -252,19 +283,33 @@ draw_triangle :: proc(
 	fill_color:   [4]f32,
 	border_color: [4]f32,
 	border_width: f32,
+	angle:        f32 = 0,
 ) {
 	pad := f32(1)
-	min_x := min(p0.x, p1.x, p2.x) - pad
-	min_y := min(p0.y, p1.y, p2.y) - pad
-	max_x := max(p0.x, p1.x, p2.x) + pad
-	max_y := max(p0.y, p1.y, p2.y) + pad
-	append_quad(
-		state,
-		min_x, min_y, max_x, max_y,
-		f32(int(ShapeType.Triangle)),
-		p0, p1, p2,
-		fill_color, border_color, border_width,
-	)
+	centroid := (p0 + p1 + p2) / 3.0
+	if angle != 0 {
+		r := max(
+			linalg.length(p0 - centroid),
+			linalg.length(p1 - centroid),
+			linalg.length(p2 - centroid),
+		) + border_width + pad
+		append_quad(
+			state,
+			centroid.x - r, centroid.y - r, centroid.x + r, centroid.y + r,
+			f32(int(ShapeType.Triangle)),
+			p0, p1, p2,
+			fill_color, border_color, border_width, angle,
+		)
+	} else {
+		append_quad(
+			state,
+			min(p0.x, p1.x, p2.x) - pad, min(p0.y, p1.y, p2.y) - pad,
+			max(p0.x, p1.x, p2.x) + pad, max(p0.y, p1.y, p2.y) + pad,
+			f32(int(ShapeType.Triangle)),
+			p0, p1, p2,
+			fill_color, border_color, border_width, 0,
+		)
+	}
 }
 
 draw_oval :: proc(
@@ -274,18 +319,28 @@ draw_oval :: proc(
 	fill_color:   [4]f32,
 	border_color: [4]f32,
 	border_width: f32,
+	angle:        f32 = 0,
 ) {
 	pad := f32(1)
-	append_quad(
-		state,
-		center.x - radii.x - pad,
-		center.y - radii.y - pad,
-		center.x + radii.x + pad,
-		center.y + radii.y + pad,
-		f32(int(ShapeType.Oval)),
-		center, radii, {},
-		fill_color, border_color, border_width,
-	)
+	if angle != 0 {
+		r := max(radii.x, radii.y) + border_width + pad
+		append_quad(
+			state,
+			center.x - r, center.y - r, center.x + r, center.y + r,
+			f32(int(ShapeType.Oval)),
+			center, radii, {},
+			fill_color, border_color, border_width, angle,
+		)
+	} else {
+		append_quad(
+			state,
+			center.x - radii.x - pad, center.y - radii.y - pad,
+			center.x + radii.x + pad, center.y + radii.y + pad,
+			f32(int(ShapeType.Oval)),
+			center, radii, {},
+			fill_color, border_color, border_width, 0,
+		)
+	}
 }
 
 draw_circle :: proc(
@@ -295,17 +350,16 @@ draw_circle :: proc(
 	fill_color:   [4]f32,
 	border_color: [4]f32,
 	border_width: f32,
+	angle:        f32 = 0, // circles are rotationally symmetric; accepted for API consistency
 ) {
 	pad := f32(1)
+	r := radius + border_width + pad
 	append_quad(
 		state,
-		center.x - radius - pad,
-		center.y - radius - pad,
-		center.x + radius + pad,
-		center.y + radius + pad,
+		center.x - r, center.y - r, center.x + r, center.y + r,
 		f32(int(ShapeType.Circle)),
 		center, {}, {radius, 0},
-		fill_color, border_color, border_width,
+		fill_color, border_color, border_width, angle,
 	)
 }
 
@@ -371,6 +425,7 @@ append_quad :: proc(
 	fill_color:   [4]f32,
 	border_color: [4]f32,
 	border_width: f32,
+	angle:        f32,
 ) {
 	s := &state.shapes
 	corners := [4][2]f32{
@@ -389,6 +444,7 @@ append_quad :: proc(
 			fill_color   = fill_color,
 			border_color = border_color,
 			border_width = border_width,
+			angle        = angle,
 		})
 	}
 }
@@ -535,7 +591,7 @@ initialize_shape_pipeline :: proc(state: ^VulkanState) -> linux.Errno {
 		inputRate = .VERTEX,
 	}
 
-	attrs := [10]vk.VertexInputAttributeDescription{
+	attrs := [9]vk.VertexInputAttributeDescription{
 		{location = 0, binding = 0, format = .R32G32_SFLOAT,           offset =  0}, // pos
 		{location = 1, binding = 0, format = .R32_SFLOAT,              offset =  8}, // shape_type
 		{location = 2, binding = 0, format = .R32G32_SFLOAT,           offset = 12}, // p0
@@ -544,16 +600,14 @@ initialize_shape_pipeline :: proc(state: ^VulkanState) -> linux.Errno {
 		{location = 5, binding = 0, format = .R32G32B32A32_SFLOAT,     offset = 36}, // fill_color
 		{location = 6, binding = 0, format = .R32G32B32A32_SFLOAT,     offset = 52}, // border_color
 		{location = 7, binding = 0, format = .R32_SFLOAT,              offset = 68}, // border_width
-		// locations 8,9 unused — pad to keep layout clean if needed later
-		{location = 8, binding = 0, format = .R32_SFLOAT,              offset = 68}, // (padding alias)
-		{location = 9, binding = 0, format = .R32_SFLOAT,              offset = 68}, // (padding alias)
+		{location = 8, binding = 0, format = .R32_SFLOAT,              offset = 72}, // angle
 	}
 
 	vertex_input := vk.PipelineVertexInputStateCreateInfo{
 		sType                           = .PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO,
 		vertexBindingDescriptionCount   = 1,
 		pVertexBindingDescriptions      = &binding,
-		vertexAttributeDescriptionCount = 8, // only 8 real attributes
+		vertexAttributeDescriptionCount = u32(len(attrs)),
 		pVertexAttributeDescriptions    = &attrs[0],
 	}
 
