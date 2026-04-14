@@ -8,6 +8,12 @@ import wl_display "wayland_protocol/wl_display"
 
 wl_display_handlers := wl_display.EventHandlers {
 	on_error = proc(_: u32, object_id: u32, code: u32, message: string, user_data: rawptr) {
+		fmt.printfln(
+			"FATAL wl_display error: target_object_id=%v code=%v error=%s",
+			object_id,
+			code,
+			message,
+		)
 		fmt.eprintfln(
 			"fatal error: target_object_id=%v code=%v error=%s",
 			object_id,
@@ -15,7 +21,8 @@ wl_display_handlers := wl_display.EventHandlers {
 			message,
 		)
 		// wl_display errors are unrecoverable per the Wayland spec
-		os.exit(int(linux.Errno.EINVAL))
+		state := (^state_t)(user_data)
+		state.last_err = .EPROTO
 	},
 }
 
