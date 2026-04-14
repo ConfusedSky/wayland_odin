@@ -165,7 +165,7 @@ draw_next_frame :: proc(state: ^state_t) -> Errno {
 		.Round,
 		{1, 0.2, 0.2, 1},
 		{1, 1, 1, 1},
-		2,
+		4,
 	)
 	renderer.draw_line(
 		&state.vulkan,
@@ -174,12 +174,12 @@ draw_next_frame :: proc(state: ^state_t) -> Errno {
 		12,
 		.Square,
 		{0.2, 0.5, 1, 0.8},
-		{},
-		0,
+		{1, 1, 1, 1},
+		4,
 	)
 
 	renderer.draw_rect(&state.vulkan, {200, 320}, {80, 40}, {0.3, 0.8, 0.3, 1}, {1, 1, 0, 1}, 4)
-	renderer.draw_rect(&state.vulkan, {340, 320}, {60, 60}, {0.8, 0.3, 0.8, 0.5}, {}, 0)
+	renderer.draw_rect(&state.vulkan, {340, 320}, {60, 60}, {0.8, 0.3, 0.8, 0.5}, {1, 1, 1, 1}, 4)
 
 	renderer.draw_rounded_rect(
 		&state.vulkan,
@@ -188,7 +188,7 @@ draw_next_frame :: proc(state: ^state_t) -> Errno {
 		12,
 		{1, 0.6, 0.1, 1},
 		{1, 1, 1, 1},
-		3,
+		4,
 	)
 	renderer.draw_rounded_rect(
 		&state.vulkan,
@@ -196,8 +196,8 @@ draw_next_frame :: proc(state: ^state_t) -> Errno {
 		{80, 40},
 		20,
 		{0.1, 0.8, 0.9, 0.7},
-		{0, 0, 0, 1},
-		2,
+		{1, 1, 1, 1},
+		4,
 	)
 
 	renderer.draw_triangle(
@@ -207,7 +207,7 @@ draw_next_frame :: proc(state: ^state_t) -> Errno {
 		{430, 260},
 		{1, 0.4, 0, 1},
 		{1, 1, 1, 1},
-		3,
+		4,
 	)
 	renderer.draw_triangle(
 		&state.vulkan,
@@ -215,15 +215,15 @@ draw_next_frame :: proc(state: ^state_t) -> Errno {
 		{570, 390},
 		{450, 390},
 		{0.5, 0, 1, 0.8},
-		{},
-		0,
+		{1, 1, 1, 1},
+		4,
 	)
 
-	renderer.draw_oval(&state.vulkan, {210, 530}, {90, 40}, {1, 0.2, 0.5, 1}, {1, 1, 1, 1}, 3)
-	renderer.draw_oval(&state.vulkan, {390, 530}, {40, 70}, {0.2, 0.9, 0.4, 0.6}, {}, 0)
+	renderer.draw_oval(&state.vulkan, {210, 530}, {90, 40}, {1, 0.2, 0.5, 1}, {1, 1, 1, 1}, 4)
+	renderer.draw_oval(&state.vulkan, {390, 530}, {40, 70}, {0.2, 0.9, 0.4, 0.6}, {1, 1, 1, 1}, 4)
 
-	renderer.draw_circle(&state.vulkan, {530, 430}, 45, {1, 0.8, 0, 1}, {0.4, 0.2, 0, 1}, 4)
-	renderer.draw_circle(&state.vulkan, {640, 430}, 30, {0, 0.6, 1, 0.7}, {}, 0)
+	renderer.draw_circle(&state.vulkan, {530, 430}, 45, {1, 1, 1, 1}, {}, 0)
+	renderer.draw_circle(&state.vulkan, {640, 430}, 30, {0, 0.6, 1, 0.7}, {1, 1, 1, 1}, 4)
 
 	renderer.render_frame(
 		&state.vulkan,

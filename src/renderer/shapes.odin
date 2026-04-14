@@ -603,10 +603,12 @@ initialize_shape_pipeline :: proc(state: ^VulkanState) -> linux.Errno {
 		rasterizationSamples = {._1},
 	}
 
-	// Alpha blending — shapes composite over the grid
+	// Premultiplied-alpha blending — the shader already multiplies RGB by alpha,
+	// so the source factor must be ONE (not SRC_ALPHA) to avoid a second multiply
+	// that would darken anti-aliased and translucent edges.
 	blend_attach := vk.PipelineColorBlendAttachmentState{
 		blendEnable         = true,
-		srcColorBlendFactor = .SRC_ALPHA,
+		srcColorBlendFactor = .ONE,
 		dstColorBlendFactor = .ONE_MINUS_SRC_ALPHA,
 		colorBlendOp        = .ADD,
 		srcAlphaBlendFactor = .ONE,

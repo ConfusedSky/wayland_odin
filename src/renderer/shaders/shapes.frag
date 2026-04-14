@@ -142,8 +142,9 @@ void main() {
             discard;
     }
 
-    // Antialiasing: 1-pixel smooth band around the boundary
-    float aa = max(fwidth(d), 0.0001) * 0.5;
+    // Width of the AA transition in pixels (smoothstep spans AA_PIXELS total).
+    const float AA_PIXELS = 2.0;
+    float aa = AA_PIXELS * 0.5;
 
     // outer_a: 1 inside the shape boundary, 0 outside
     float outer_a = 1.0 - smoothstep(-aa, aa, d);
