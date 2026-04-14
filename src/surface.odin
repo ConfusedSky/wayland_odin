@@ -1,6 +1,7 @@
 package Main
 
 import constants "./constants"
+import renderer "./renderer"
 import "core:fmt"
 import wl_buffer "wayland_protocol/wl_buffer"
 import wl_callback "wayland_protocol/wl_callback"
@@ -108,10 +109,11 @@ initialize_surface :: proc(state: ^state_t) -> Errno {
 	xdg_toplevel.set_min_size(&state.xdg_toplevel, 50, 50) or_return
 	wl_surface.commit(&state.wl_surface) or_return
 
-	initialize_vulkan_pipeline(&state.vulkan) or_return
-	initialize_vulkan_commands(&state.vulkan) or_return
+	renderer.initialize_vulkan_pipeline(&state.vulkan) or_return
+	renderer.initialize_vulkan_commands(&state.vulkan) or_return
+	renderer.initialize_shape_renderer(&state.vulkan) or_return
 
-	vk_buf, err := allocate_vulkan_buffer(&state.vulkan, state.max_w, state.max_h)
+	vk_buf, err := renderer.allocate_vulkan_buffer(&state.vulkan, state.max_w, state.max_h)
 	if err != nil do return err
 	state.vk_buf = vk_buf
 
@@ -152,12 +154,87 @@ draw_next_frame :: proc(state: ^state_t) -> Errno {
 		return nil
 	}
 
-	render_frame(&state.vulkan, &state.vk_buf, RenderParams{
-		width     = state.w,
-		height    = state.h,
-		pointer_x = f32(state.pointer.surface_x),
-		pointer_y = f32(state.pointer.surface_y),
-	}) or_return
+	// Submit shapes for this frame
+	renderer.start_shapes(&state.vulkan)
+
+	renderer.draw_line(
+		&state.vulkan,
+		{100, 100},
+		{400, 200},
+		8,
+		.Round,
+		{1, 0.2, 0.2, 1},
+		{1, 1, 1, 1},
+		2,
+	)
+	renderer.draw_line(
+		&state.vulkan,
+		{100, 160},
+		{400, 260},
+		12,
+		.Square,
+		{0.2, 0.5, 1, 0.8},
+		{},
+		0,
+	)
+
+	renderer.draw_rect(&state.vulkan, {200, 320}, {80, 40}, {0.3, 0.8, 0.3, 1}, {1, 1, 0, 1}, 4)
+	renderer.draw_rect(&state.vulkan, {340, 320}, {60, 60}, {0.8, 0.3, 0.8, 0.5}, {}, 0)
+
+	renderer.draw_rounded_rect(
+		&state.vulkan,
+		{160, 430},
+		{70, 35},
+		12,
+		{1, 0.6, 0.1, 1},
+		{1, 1, 1, 1},
+		3,
+	)
+	renderer.draw_rounded_rect(
+		&state.vulkan,
+		{310, 430},
+		{80, 40},
+		20,
+		{0.1, 0.8, 0.9, 0.7},
+		{0, 0, 0, 1},
+		2,
+	)
+
+	renderer.draw_triangle(
+		&state.vulkan,
+		{510, 110},
+		{590, 260},
+		{430, 260},
+		{1, 0.4, 0, 1},
+		{1, 1, 1, 1},
+		3,
+	)
+	renderer.draw_triangle(
+		&state.vulkan,
+		{510, 290},
+		{570, 390},
+		{450, 390},
+		{0.5, 0, 1, 0.8},
+		{},
+		0,
+	)
+
+	renderer.draw_oval(&state.vulkan, {210, 530}, {90, 40}, {1, 0.2, 0.5, 1}, {1, 1, 1, 1}, 3)
+	renderer.draw_oval(&state.vulkan, {390, 530}, {40, 70}, {0.2, 0.9, 0.4, 0.6}, {}, 0)
+
+	renderer.draw_circle(&state.vulkan, {530, 430}, 45, {1, 0.8, 0, 1}, {0.4, 0.2, 0, 1}, 4)
+	renderer.draw_circle(&state.vulkan, {640, 430}, 30, {0, 0.6, 1, 0.7}, {}, 0)
+
+	renderer.render_frame(
+		&state.vulkan,
+		&state.vk_buf,
+		renderer.RenderParams {
+			width = state.w,
+			height = state.h,
+			pointer_x = f32(state.pointer.surface_x),
+			pointer_y = f32(state.pointer.surface_y),
+		},
+	) or_return
 
 	wl_surface.attach(&state.wl_surface, &state.wl_buffer, 0, 0) or_return
 	wl_surface.damage_buffer(&state.wl_surface, 0, 0, i32(state.w), i32(state.h)) or_return

@@ -1,6 +1,7 @@
 package Main
 
 import constants "./constants"
+import renderer "./renderer"
 import "core:sys/linux"
 import wl_buffer "wayland_protocol/wl_buffer"
 import wl_compositor "wayland_protocol/wl_compositor"
@@ -49,11 +50,11 @@ state_t :: struct {
 	max_h:           u32,
 	buf_w:           u32,
 	buf_h:           u32,
-	vk_buf:          VulkanBuffer,
+	vk_buf:          renderer.VulkanBuffer,
 	state:           state_state_t,
 	event_handlers:  [dynamic]RegisteredEventHandler,
 	last_err:        Errno,
-	vulkan:          VulkanState,
+	vulkan:          renderer.VulkanState,
 }
 
 HandleEventProc :: proc(
@@ -124,8 +125,8 @@ find_event_handler :: proc(handlers: []RegisteredEventHandler, object_id: u32) -
 }
 
 cleanup :: proc(state: ^state_t) -> Errno {
-	free_vulkan_buffer(&state.vulkan, &state.vk_buf)
-	cleanup_vulkan(&state.vulkan)
+	renderer.free_vulkan_buffer(&state.vulkan, &state.vk_buf)
+	renderer.cleanup_vulkan(&state.vulkan)
 	for len(state.event_handlers) > 0 {
 		unregister_event_handler(state, state.event_handlers[0].object_id)
 	}
