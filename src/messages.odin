@@ -22,6 +22,9 @@ wayland_handle_messages :: proc(state: ^state_t) -> Errno {
 	} else if read_bytes == -1 || recv_err != nil {
 		fmt.eprintln("Failed to receive new events")
 		return recv_err
+	} else if read_bytes == 0 {
+		fmt.eprintln("Compositor closed the connection")
+		return .ECONNRESET
 	}
 
 	fmt.printfln("Received %d bytes", read_bytes)
