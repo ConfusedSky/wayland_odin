@@ -3,6 +3,7 @@ package renderer
 import "core:c"
 import "core:dynlib"
 import "core:fmt"
+import "base:runtime"
 import "core:sys/linux"
 import vk "vendor:vulkan"
 
@@ -26,10 +27,11 @@ VulkanBuffer :: struct {
 }
 
 VulkanState :: struct {
-	lib:             dynlib.Library,
-	instance:        vk.Instance,
-	physical_device: vk.PhysicalDevice,
-	device:          vk.Device,
+	lib:              dynlib.Library,
+	instance:         vk.Instance,
+	debug_messenger:  vk.DebugUtilsMessengerEXT,
+	physical_device:  vk.PhysicalDevice,
+	device:           vk.Device,
 	graphics_queue:  vk.Queue,
 	graphics_family: u32,
 	render_pass:     vk.RenderPass,
@@ -56,6 +58,30 @@ VULKAN_DEVICE_EXTENSIONS :: [?]cstring{
 	"VK_EXT_external_memory_dma_buf",
 }
 
+VULKAN_VALIDATION_LAYER :: cstring("VK_LAYER_KHRONOS_validation")
+VULKAN_INSTANCE_EXTENSIONS :: [?]cstring{"VK_EXT_debug_utils"}
+
+vulkan_debug_callback :: proc "system" (
+	message_severity: vk.DebugUtilsMessageSeverityFlagsEXT,
+	message_types: vk.DebugUtilsMessageTypeFlagsEXT,
+	callback_data: ^vk.DebugUtilsMessengerCallbackDataEXT,
+	user_data: rawptr,
+) -> b32 {
+	context = runtime.default_context()
+	prefix: string
+	if .ERROR in message_severity {
+		prefix = "ERROR"
+	} else if .WARNING in message_severity {
+		prefix = "WARNING"
+	} else if .INFO in message_severity {
+		prefix = "INFO"
+	} else {
+		prefix = "VERBOSE"
+	}
+	fmt.eprintfln("vulkan [%s]: %s", prefix, callback_data.pMessage)
+	return false
+}
+
 initialize_vulkan :: proc(state: ^VulkanState) -> linux.Errno {
 	lib, ok := dynlib.load_library("libvulkan.so.1")
 	if !ok {
@@ -71,6 +97,24 @@ initialize_vulkan :: proc(state: ^VulkanState) -> linux.Errno {
 	}
 	vk.load_proc_addresses_global(get_proc_addr)
 
+	// Check if the validation layer is available
+	layer_count: u32
+	vk.EnumerateInstanceLayerProperties(&layer_count, nil)
+	available_layers := make([]vk.LayerProperties, layer_count)
+	defer delete(available_layers)
+	vk.EnumerateInstanceLayerProperties(&layer_count, raw_data(available_layers))
+
+	validation_available := false
+	for &layer in available_layers {
+		if string(cstring(&layer.layerName[0])) == string(VULKAN_VALIDATION_LAYER) {
+			validation_available = true
+			break
+		}
+	}
+	if !validation_available {
+		fmt.eprintln("vulkan: VK_LAYER_KHRONOS_validation not found — install vulkan-validation-layers")
+	}
+
 	app_info := vk.ApplicationInfo{
 		sType              = .APPLICATION_INFO,
 		pApplicationName   = "wayland_from_scratch",
@@ -79,9 +123,15 @@ initialize_vulkan :: proc(state: ^VulkanState) -> linux.Errno {
 		engineVersion      = vk.MAKE_VERSION(0, 1, 0),
 		apiVersion         = vk.API_VERSION_1_2,
 	}
+	enabled_layers := [?]cstring{VULKAN_VALIDATION_LAYER}
+	instance_extensions := VULKAN_INSTANCE_EXTENSIONS
 	instance_info := vk.InstanceCreateInfo{
-		sType            = .INSTANCE_CREATE_INFO,
-		pApplicationInfo = &app_info,
+		sType                   = .INSTANCE_CREATE_INFO,
+		pApplicationInfo        = &app_info,
+		enabledLayerCount       = 1 if validation_available else 0,
+		ppEnabledLayerNames     = &enabled_layers[0] if validation_available else nil,
+		enabledExtensionCount   = u32(len(instance_extensions)) if validation_available else 0,
+		ppEnabledExtensionNames = &instance_extensions[0] if validation_available else nil,
 	}
 	if res := vk.CreateInstance(&instance_info, nil, &state.instance); res != .SUCCESS {
 		fmt.eprintln("vulkan: vkCreateInstance failed:", res)
@@ -89,6 +139,26 @@ initialize_vulkan :: proc(state: ^VulkanState) -> linux.Errno {
 	}
 	vk.load_proc_addresses_instance(state.instance)
 	fmt.printfln("vulkan: instance created")
+
+	if validation_available {
+		debug_messenger_info := vk.DebugUtilsMessengerCreateInfoEXT{
+			sType           = .DEBUG_UTILS_MESSENGER_CREATE_INFO_EXT,
+			messageSeverity = {.VERBOSE, .INFO, .WARNING, .ERROR},
+			messageType     = {.GENERAL, .VALIDATION, .PERFORMANCE},
+			pfnUserCallback = vulkan_debug_callback,
+		}
+		if res := vk.CreateDebugUtilsMessengerEXT(
+			state.instance,
+			&debug_messenger_info,
+			nil,
+			&state.debug_messenger,
+		); res != .SUCCESS {
+			fmt.eprintln("vulkan: failed to create debug messenger:", res)
+			// Non-fatal — continue without the messenger
+		} else {
+			fmt.printfln("vulkan: validation layers active")
+		}
+	}
 
 	device_count: u32
 	vk.EnumeratePhysicalDevices(state.instance, &device_count, nil)
@@ -833,6 +903,10 @@ cleanup_vulkan :: proc(state: ^VulkanState) {
 		state.device = nil
 	}
 	if state.instance != nil {
+		if state.debug_messenger != 0 {
+			vk.DestroyDebugUtilsMessengerEXT(state.instance, state.debug_messenger, nil)
+			state.debug_messenger = 0
+		}
 		vk.DestroyInstance(state.instance, nil)
 		state.instance = nil
 	}
