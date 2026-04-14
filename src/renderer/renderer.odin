@@ -174,7 +174,7 @@ initialize_vulkan :: proc(state: ^VulkanState) -> linux.Errno {
 	for pd in physical_devices {
 		props: vk.PhysicalDeviceProperties
 		vk.GetPhysicalDeviceProperties(pd, &props)
-		if props.deviceType == .DISCRETE_GPU {
+		if props.deviceType == .INTEGRATED_GPU {
 			chosen = pd
 			break
 		}
