@@ -17,6 +17,18 @@ import xdg_toplevel "wayland_protocol/xdg_toplevel"
 import xdg_wm_base "wayland_protocol/xdg_wm_base"
 import zwp_linux_dmabuf_v1 "wayland_protocol/zwp_linux_dmabuf_v1"
 
+DmabufState :: struct {
+	proxy:               zwp_linux_dmabuf_v1.t,
+	feedback_done:       bool,
+	modifier:            u64,
+	supported_modifiers: []u64, // Vulkan-queried; owned by run(), do not free here
+	vk_buf:              renderer.VulkanBuffer,
+	wl_buf:              wl_buffer.t,
+	buffer_ready:        bool,
+	buf_w:               u32,
+	buf_h:               u32,
+}
+
 state_state_t :: enum {
 	STATE_NONE,
 	STATE_SURFACE_ACKED_CONFIGURE,
@@ -34,9 +46,7 @@ state_t :: struct {
 	wl_pointer:      wl_pointer.t,
 	pointer:         Pointer,
 	wl_shm:          wl_shm.t,
-	zwp_linux_dmabuf: zwp_linux_dmabuf_v1.t,
-	wl_buffer:       wl_buffer.t,
-	buffer_ready:    bool,
+	dmabuf:          DmabufState,
 	xdg_wm_base:     xdg_wm_base.t,
 	xdg_surface:     xdg_surface.t,
 	wl_compositor:   wl_compositor.t,
@@ -48,9 +58,6 @@ state_t :: struct {
 	max_w:           u32,
 	h:               u32,
 	max_h:           u32,
-	buf_w:           u32,
-	buf_h:           u32,
-	vk_buf:          renderer.VulkanBuffer,
 	state:           state_state_t,
 	event_handlers:  [dynamic]RegisteredEventHandler,
 	last_err:        Errno,
@@ -125,7 +132,7 @@ find_event_handler :: proc(handlers: []RegisteredEventHandler, object_id: u32) -
 }
 
 cleanup :: proc(state: ^state_t) -> Errno {
-	renderer.free_vulkan_buffer(&state.vulkan, &state.vk_buf)
+	renderer.free_vulkan_buffer(&state.vulkan, &state.dmabuf.vk_buf)
 	renderer.cleanup_vulkan(&state.vulkan)
 	for len(state.event_handlers) > 0 {
 		unregister_event_handler(state, state.event_handlers[0].object_id)

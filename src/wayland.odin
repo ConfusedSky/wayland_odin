@@ -35,6 +35,14 @@ run :: proc(state: ^state_t) -> Errno {
 	initialize_wl_registry(state) or_return
 	renderer.initialize_vulkan(&state.vulkan) or_return
 
+	// Query GPU-supported DRM modifiers and pick the best one up-front.
+	// The feedback mechanism may later refine this, but we need a valid
+	// default before allocate_vulkan_buffer is ever called.
+	supported_mods := renderer.query_supported_modifiers(&state.vulkan)
+	defer delete(supported_mods)
+	state.dmabuf.supported_modifiers = supported_mods
+	state.dmabuf.modifier = renderer.pick_modifier(supported_mods)
+
 	for !state.cursor.initialized {
 		wayland_handle_messages(state) or_return
 		if state.wl_compositor.id > 0 && state.wl_shm.id > 0 {
@@ -42,7 +50,7 @@ run :: proc(state: ^state_t) -> Errno {
 		}
 	}
 
-	for !state.buffer_ready && state.wl_surface.id == 0 {
+	for !state.dmabuf.buffer_ready && state.wl_surface.id == 0 {
 		wayland_handle_messages(state) or_return
 		if can_initialize_surface(state) {
 			initialize_surface(state) or_return
@@ -51,7 +59,7 @@ run :: proc(state: ^state_t) -> Errno {
 
 	for running {
 		wayland_handle_messages(state) or_return
-		if state.buffer_ready && state.state == .STATE_SURFACE_ACKED_CONFIGURE {
+		if state.dmabuf.buffer_ready && state.state == .STATE_SURFACE_ACKED_CONFIGURE {
 			draw_next_frame(state) or_return
 		}
 	}
