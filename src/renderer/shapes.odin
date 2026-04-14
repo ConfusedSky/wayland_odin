@@ -115,9 +115,8 @@ initialize_shape_renderer :: proc(state: ^VulkanState) -> linux.Errno {
 	idx_mapped: rawptr
 	vk.MapMemory(state.device, s.index_memory, 0, index_size, {}, &idx_mapped)
 	mem.copy(idx_mapped, &indices[0], int(index_size))
-	vk.UnmapMemory(state.device, s.index_memory)
 
-	// Flush if not HOST_COHERENT
+	// Flush if not HOST_COHERENT (must happen before unmap)
 	flush_idx := vk.MappedMemoryRange{
 		sType  = .MAPPED_MEMORY_RANGE,
 		memory = s.index_memory,
@@ -125,6 +124,7 @@ initialize_shape_renderer :: proc(state: ^VulkanState) -> linux.Errno {
 		size   = vk.DeviceSize(vk.WHOLE_SIZE),
 	}
 	vk.FlushMappedMemoryRanges(state.device, 1, &flush_idx)
+	vk.UnmapMemory(state.device, s.index_memory)
 
 	// Initial dynamic vertex buffer (persistently mapped)
 	allocate_shape_vertex_buffer(state, INITIAL_SHAPE_BUFFER_CAPACITY) or_return

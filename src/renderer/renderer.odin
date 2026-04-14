@@ -749,7 +749,7 @@ render_frame :: proc(
 			sType               = .IMAGE_MEMORY_BARRIER,
 			srcAccessMask       = {.COLOR_ATTACHMENT_WRITE},
 			dstAccessMask       = {.TRANSFER_READ},
-			oldLayout           = .COLOR_ATTACHMENT_OPTIMAL,
+			oldLayout           = .GENERAL,
 			newLayout           = .TRANSFER_SRC_OPTIMAL,
 			srcQueueFamilyIndex = vk.QUEUE_FAMILY_IGNORED,
 			dstQueueFamilyIndex = vk.QUEUE_FAMILY_IGNORED,

@@ -3,3 +3,6 @@ wayland_gen.bin
 
 src/wayland_protocol/
 **/**.spv
+
+output.log
+error.log
