@@ -1,9 +1,9 @@
 package renderer
 
+import "base:runtime"
 import "core:c"
 import "core:dynlib"
 import "core:fmt"
-import "base:runtime"
 import "core:sys/linux"
 import vk "vendor:vulkan"
 
@@ -14,11 +14,11 @@ DRM_FORMAT_MOD_LINEAR :: u64(0)
 
 VulkanBuffer :: struct {
 	// LINEAR image: DMA-buf exported to the compositor (written to via vkCmdCopyImage)
-	image:  vk.Image,
-	memory: vk.DeviceMemory,
-	dma_fd: linux.Fd,
-	stride: u32,
-	offset: u32,
+	image:             vk.Image,
+	memory:            vk.DeviceMemory,
+	dma_fd:            linux.Fd,
+	stride:            u32,
+	offset:            u32,
 	// OPTIMAL image: GPU render target (rendered into, then copied to the LINEAR image)
 	render_image:      vk.Image,
 	render_memory:     vk.DeviceMemory,
@@ -27,11 +27,11 @@ VulkanBuffer :: struct {
 }
 
 VulkanState :: struct {
-	lib:              dynlib.Library,
-	instance:         vk.Instance,
-	debug_messenger:  vk.DebugUtilsMessengerEXT,
-	physical_device:  vk.PhysicalDevice,
-	device:           vk.Device,
+	lib:             dynlib.Library,
+	instance:        vk.Instance,
+	debug_messenger: vk.DebugUtilsMessengerEXT,
+	physical_device: vk.PhysicalDevice,
+	device:          vk.Device,
 	graphics_queue:  vk.Queue,
 	graphics_family: u32,
 	render_pass:     vk.RenderPass,
@@ -52,7 +52,7 @@ RenderParams :: struct {
 	pointer_y: f32,
 }
 
-VULKAN_DEVICE_EXTENSIONS :: [?]cstring{
+VULKAN_DEVICE_EXTENSIONS :: [?]cstring {
 	"VK_KHR_external_memory",
 	"VK_KHR_external_memory_fd",
 	"VK_EXT_external_memory_dma_buf",
@@ -112,10 +112,12 @@ initialize_vulkan :: proc(state: ^VulkanState) -> linux.Errno {
 		}
 	}
 	if !validation_available {
-		fmt.eprintln("vulkan: VK_LAYER_KHRONOS_validation not found — install vulkan-validation-layers")
+		fmt.eprintln(
+			"vulkan: VK_LAYER_KHRONOS_validation not found — install vulkan-validation-layers",
+		)
 	}
 
-	app_info := vk.ApplicationInfo{
+	app_info := vk.ApplicationInfo {
 		sType              = .APPLICATION_INFO,
 		pApplicationName   = "wayland_from_scratch",
 		applicationVersion = vk.MAKE_VERSION(0, 1, 0),
@@ -125,7 +127,7 @@ initialize_vulkan :: proc(state: ^VulkanState) -> linux.Errno {
 	}
 	enabled_layers := [?]cstring{VULKAN_VALIDATION_LAYER}
 	instance_extensions := VULKAN_INSTANCE_EXTENSIONS
-	instance_info := vk.InstanceCreateInfo{
+	instance_info := vk.InstanceCreateInfo {
 		sType                   = .INSTANCE_CREATE_INFO,
 		pApplicationInfo        = &app_info,
 		enabledLayerCount       = 1 if validation_available else 0,
@@ -141,7 +143,7 @@ initialize_vulkan :: proc(state: ^VulkanState) -> linux.Errno {
 	fmt.printfln("vulkan: instance created")
 
 	if validation_available {
-		debug_messenger_info := vk.DebugUtilsMessengerCreateInfoEXT{
+		debug_messenger_info := vk.DebugUtilsMessengerCreateInfoEXT {
 			sType           = .DEBUG_UTILS_MESSENGER_CREATE_INFO_EXT,
 			messageSeverity = {.VERBOSE, .INFO, .WARNING, .ERROR},
 			messageType     = {.GENERAL, .VALIDATION, .PERFORMANCE},
@@ -208,14 +210,14 @@ initialize_vulkan :: proc(state: ^VulkanState) -> linux.Errno {
 	fmt.printfln("vulkan: graphics queue family %v", state.graphics_family)
 
 	priority: f32 = 1.0
-	queue_info := vk.DeviceQueueCreateInfo{
+	queue_info := vk.DeviceQueueCreateInfo {
 		sType            = .DEVICE_QUEUE_CREATE_INFO,
 		queueFamilyIndex = state.graphics_family,
 		queueCount       = 1,
 		pQueuePriorities = &priority,
 	}
 	extensions := VULKAN_DEVICE_EXTENSIONS
-	device_info := vk.DeviceCreateInfo{
+	device_info := vk.DeviceCreateInfo {
 		sType                   = .DEVICE_CREATE_INFO,
 		queueCreateInfoCount    = 1,
 		pQueueCreateInfos       = &queue_info,
@@ -247,22 +249,22 @@ allocate_vulkan_buffer :: proc(
 	mem_props: vk.PhysicalDeviceMemoryProperties
 	vk.GetPhysicalDeviceMemoryProperties(vk_state.physical_device, &mem_props)
 
-	ext_mem_image_info := vk.ExternalMemoryImageCreateInfo{
+	ext_mem_image_info := vk.ExternalMemoryImageCreateInfo {
 		sType       = .EXTERNAL_MEMORY_IMAGE_CREATE_INFO,
 		handleTypes = {.DMA_BUF_EXT},
 	}
-	linear_image_info := vk.ImageCreateInfo{
-		sType         = .IMAGE_CREATE_INFO,
-		pNext         = &ext_mem_image_info,
-		imageType     = .D2,
-		format        = .B8G8R8A8_UNORM,
-		extent        = {width = w, height = h, depth = 1},
-		mipLevels     = 1,
-		arrayLayers   = 1,
-		samples       = {._1},
-		tiling        = .LINEAR,
-		usage         = {.TRANSFER_DST},
-		sharingMode   = .EXCLUSIVE,
+	linear_image_info := vk.ImageCreateInfo {
+		sType = .IMAGE_CREATE_INFO,
+		pNext = &ext_mem_image_info,
+		imageType = .D2,
+		format = .B8G8R8A8_UNORM,
+		extent = {width = w, height = h, depth = 1},
+		mipLevels = 1,
+		arrayLayers = 1,
+		samples = {._1},
+		tiling = .LINEAR,
+		usage = {.TRANSFER_DST},
+		sharingMode = .EXCLUSIVE,
 		initialLayout = .UNDEFINED,
 	}
 	if res := vk.CreateImage(vk_state.device, &linear_image_info, nil, &buf.image);
@@ -288,11 +290,11 @@ allocate_vulkan_buffer :: proc(
 		return {}, .ENOMEM
 	}
 
-	export_alloc_info := vk.ExportMemoryAllocateInfo{
+	export_alloc_info := vk.ExportMemoryAllocateInfo {
 		sType       = .EXPORT_MEMORY_ALLOCATE_INFO,
 		handleTypes = {.DMA_BUF_EXT},
 	}
-	linear_alloc_info := vk.MemoryAllocateInfo{
+	linear_alloc_info := vk.MemoryAllocateInfo {
 		sType           = .MEMORY_ALLOCATE_INFO,
 		pNext           = &export_alloc_info,
 		allocationSize  = linear_mem_reqs.size,
@@ -310,7 +312,7 @@ allocate_vulkan_buffer :: proc(
 		return {}, .EINVAL
 	}
 
-	fd_info := vk.MemoryGetFdInfoKHR{
+	fd_info := vk.MemoryGetFdInfoKHR {
 		sType      = .MEMORY_GET_FD_INFO_KHR,
 		memory     = buf.memory,
 		handleType = {.DMA_BUF_EXT},
@@ -323,7 +325,7 @@ allocate_vulkan_buffer :: proc(
 	buf.dma_fd = linux.Fd(raw_fd)
 	defer if err != nil do linux.close(buf.dma_fd)
 
-	subresource := vk.ImageSubresource{
+	subresource := vk.ImageSubresource {
 		aspectMask = {.COLOR},
 		mipLevel   = 0,
 		arrayLayer = 0,
@@ -333,17 +335,17 @@ allocate_vulkan_buffer :: proc(
 	buf.stride = u32(layout.rowPitch)
 	buf.offset = u32(layout.offset)
 
-	render_image_info := vk.ImageCreateInfo{
-		sType         = .IMAGE_CREATE_INFO,
-		imageType     = .D2,
-		format        = .B8G8R8A8_UNORM,
-		extent        = {width = w, height = h, depth = 1},
-		mipLevels     = 1,
-		arrayLayers   = 1,
-		samples       = {._1},
-		tiling        = .OPTIMAL,
-		usage         = {.COLOR_ATTACHMENT, .TRANSFER_SRC},
-		sharingMode   = .EXCLUSIVE,
+	render_image_info := vk.ImageCreateInfo {
+		sType = .IMAGE_CREATE_INFO,
+		imageType = .D2,
+		format = .B8G8R8A8_UNORM,
+		extent = {width = w, height = h, depth = 1},
+		mipLevels = 1,
+		arrayLayers = 1,
+		samples = {._1},
+		tiling = .OPTIMAL,
+		usage = {.COLOR_ATTACHMENT, .TRANSFER_SRC},
+		sharingMode = .EXCLUSIVE,
 		initialLayout = .UNDEFINED,
 	}
 	if res := vk.CreateImage(vk_state.device, &render_image_info, nil, &buf.render_image);
@@ -377,7 +379,7 @@ allocate_vulkan_buffer :: proc(
 		return {}, .ENOMEM
 	}
 
-	render_alloc_info := vk.MemoryAllocateInfo{
+	render_alloc_info := vk.MemoryAllocateInfo {
 		sType           = .MEMORY_ALLOCATE_INFO,
 		allocationSize  = render_mem_reqs.size,
 		memoryTypeIndex = render_mem_type_idx,
@@ -395,17 +397,17 @@ allocate_vulkan_buffer :: proc(
 		return {}, .EINVAL
 	}
 
-	view_info := vk.ImageViewCreateInfo{
-		sType    = .IMAGE_VIEW_CREATE_INFO,
-		image    = buf.render_image,
+	view_info := vk.ImageViewCreateInfo {
+		sType = .IMAGE_VIEW_CREATE_INFO,
+		image = buf.render_image,
 		viewType = .D2,
-		format   = .B8G8R8A8_UNORM,
-		subresourceRange = vk.ImageSubresourceRange{
-			aspectMask     = {.COLOR},
-			baseMipLevel   = 0,
-			levelCount     = 1,
+		format = .B8G8R8A8_UNORM,
+		subresourceRange = vk.ImageSubresourceRange {
+			aspectMask = {.COLOR},
+			baseMipLevel = 0,
+			levelCount = 1,
 			baseArrayLayer = 0,
-			layerCount     = 1,
+			layerCount = 1,
 		},
 	}
 	if res := vk.CreateImageView(vk_state.device, &view_info, nil, &buf.render_image_view);
@@ -415,7 +417,7 @@ allocate_vulkan_buffer :: proc(
 	}
 	defer if err != nil do vk.DestroyImageView(vk_state.device, buf.render_image_view, nil)
 
-	fb_info := vk.FramebufferCreateInfo{
+	fb_info := vk.FramebufferCreateInfo {
 		sType           = .FRAMEBUFFER_CREATE_INFO,
 		renderPass      = vk_state.render_pass,
 		attachmentCount = 1,
@@ -440,9 +442,9 @@ allocate_vulkan_buffer :: proc(
 }
 
 initialize_vulkan_pipeline :: proc(state: ^VulkanState) -> linux.Errno {
-	color_attachment := vk.AttachmentDescription{
+	color_attachment := vk.AttachmentDescription {
 		format         = .B8G8R8A8_UNORM,
-		samples         = {._1},
+		samples        = {._1},
 		loadOp         = .CLEAR,
 		storeOp        = .STORE,
 		stencilLoadOp  = .DONT_CARE,
@@ -450,16 +452,16 @@ initialize_vulkan_pipeline :: proc(state: ^VulkanState) -> linux.Errno {
 		initialLayout  = .UNDEFINED,
 		finalLayout    = .GENERAL,
 	}
-	color_attachment_ref := vk.AttachmentReference{
+	color_attachment_ref := vk.AttachmentReference {
 		attachment = 0,
 		layout     = .COLOR_ATTACHMENT_OPTIMAL,
 	}
-	subpass := vk.SubpassDescription{
+	subpass := vk.SubpassDescription {
 		pipelineBindPoint    = .GRAPHICS,
 		colorAttachmentCount = 1,
 		pColorAttachments    = &color_attachment_ref,
 	}
-	dependency := vk.SubpassDependency{
+	dependency := vk.SubpassDependency {
 		srcSubpass    = vk.SUBPASS_EXTERNAL,
 		dstSubpass    = 0,
 		srcStageMask  = {.COLOR_ATTACHMENT_OUTPUT},
@@ -467,7 +469,7 @@ initialize_vulkan_pipeline :: proc(state: ^VulkanState) -> linux.Errno {
 		srcAccessMask = {},
 		dstAccessMask = {.COLOR_ATTACHMENT_WRITE},
 	}
-	render_pass_info := vk.RenderPassCreateInfo{
+	render_pass_info := vk.RenderPassCreateInfo {
 		sType           = .RENDER_PASS_CREATE_INFO,
 		attachmentCount = 1,
 		pAttachments    = &color_attachment,
@@ -485,7 +487,7 @@ initialize_vulkan_pipeline :: proc(state: ^VulkanState) -> linux.Errno {
 	vert_spv := #load("shaders/grid.vert.spv")
 	frag_spv := #load("shaders/grid.frag.spv")
 
-	vert_info := vk.ShaderModuleCreateInfo{
+	vert_info := vk.ShaderModuleCreateInfo {
 		sType    = .SHADER_MODULE_CREATE_INFO,
 		codeSize = len(vert_spv),
 		pCode    = cast([^]u32)raw_data(vert_spv),
@@ -496,7 +498,7 @@ initialize_vulkan_pipeline :: proc(state: ^VulkanState) -> linux.Errno {
 		return .EINVAL
 	}
 
-	frag_info := vk.ShaderModuleCreateInfo{
+	frag_info := vk.ShaderModuleCreateInfo {
 		sType    = .SHADER_MODULE_CREATE_INFO,
 		codeSize = len(frag_spv),
 		pCode    = cast([^]u32)raw_data(frag_spv),
@@ -508,12 +510,12 @@ initialize_vulkan_pipeline :: proc(state: ^VulkanState) -> linux.Errno {
 	}
 
 	// Push constant: 5 × f32
-	push_constant_range := vk.PushConstantRange{
+	push_constant_range := vk.PushConstantRange {
 		stageFlags = {.FRAGMENT},
 		offset     = 0,
 		size       = 5 * size_of(f32),
 	}
-	layout_info := vk.PipelineLayoutCreateInfo{
+	layout_info := vk.PipelineLayoutCreateInfo {
 		sType                  = .PIPELINE_LAYOUT_CREATE_INFO,
 		pushConstantRangeCount = 1,
 		pPushConstantRanges    = &push_constant_range,
@@ -524,44 +526,44 @@ initialize_vulkan_pipeline :: proc(state: ^VulkanState) -> linux.Errno {
 		return .EINVAL
 	}
 
-	shader_stages := [2]vk.PipelineShaderStageCreateInfo{
+	shader_stages := [2]vk.PipelineShaderStageCreateInfo {
 		{
-			sType  = .PIPELINE_SHADER_STAGE_CREATE_INFO,
-			stage  = {.VERTEX},
+			sType = .PIPELINE_SHADER_STAGE_CREATE_INFO,
+			stage = {.VERTEX},
 			module = state.vert_shader,
-			pName  = "main",
+			pName = "main",
 		},
 		{
-			sType  = .PIPELINE_SHADER_STAGE_CREATE_INFO,
-			stage  = {.FRAGMENT},
+			sType = .PIPELINE_SHADER_STAGE_CREATE_INFO,
+			stage = {.FRAGMENT},
 			module = state.frag_shader,
-			pName  = "main",
+			pName = "main",
 		},
 	}
 
-	vertex_input_info := vk.PipelineVertexInputStateCreateInfo{
+	vertex_input_info := vk.PipelineVertexInputStateCreateInfo {
 		sType = .PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO,
 	}
 
-	input_assembly := vk.PipelineInputAssemblyStateCreateInfo{
+	input_assembly := vk.PipelineInputAssemblyStateCreateInfo {
 		sType    = .PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO,
 		topology = .TRIANGLE_LIST,
 	}
 
 	dynamic_states := [2]vk.DynamicState{.VIEWPORT, .SCISSOR}
-	dynamic_state_info := vk.PipelineDynamicStateCreateInfo{
+	dynamic_state_info := vk.PipelineDynamicStateCreateInfo {
 		sType             = .PIPELINE_DYNAMIC_STATE_CREATE_INFO,
 		dynamicStateCount = u32(len(dynamic_states)),
 		pDynamicStates    = &dynamic_states[0],
 	}
 
-	viewport_state := vk.PipelineViewportStateCreateInfo{
+	viewport_state := vk.PipelineViewportStateCreateInfo {
 		sType         = .PIPELINE_VIEWPORT_STATE_CREATE_INFO,
 		viewportCount = 1,
 		scissorCount  = 1,
 	}
 
-	rasterizer := vk.PipelineRasterizationStateCreateInfo{
+	rasterizer := vk.PipelineRasterizationStateCreateInfo {
 		sType       = .PIPELINE_RASTERIZATION_STATE_CREATE_INFO,
 		polygonMode = .FILL,
 		cullMode    = {},
@@ -569,22 +571,22 @@ initialize_vulkan_pipeline :: proc(state: ^VulkanState) -> linux.Errno {
 		lineWidth   = 1.0,
 	}
 
-	multisample := vk.PipelineMultisampleStateCreateInfo{
+	multisample := vk.PipelineMultisampleStateCreateInfo {
 		sType                = .PIPELINE_MULTISAMPLE_STATE_CREATE_INFO,
 		rasterizationSamples = {._1},
 	}
 
 	// Opaque — grid pipeline needs no blending
-	color_blend_attachment := vk.PipelineColorBlendAttachmentState{
+	color_blend_attachment := vk.PipelineColorBlendAttachmentState {
 		colorWriteMask = {.R, .G, .B, .A},
 	}
-	color_blending := vk.PipelineColorBlendStateCreateInfo{
+	color_blending := vk.PipelineColorBlendStateCreateInfo {
 		sType           = .PIPELINE_COLOR_BLEND_STATE_CREATE_INFO,
 		attachmentCount = 1,
 		pAttachments    = &color_blend_attachment,
 	}
 
-	pipeline_info := vk.GraphicsPipelineCreateInfo{
+	pipeline_info := vk.GraphicsPipelineCreateInfo {
 		sType               = .GRAPHICS_PIPELINE_CREATE_INFO,
 		stageCount          = u32(len(shader_stages)),
 		pStages             = &shader_stages[0],
@@ -599,14 +601,8 @@ initialize_vulkan_pipeline :: proc(state: ^VulkanState) -> linux.Errno {
 		renderPass          = state.render_pass,
 		subpass             = 0,
 	}
-	if res := vk.CreateGraphicsPipelines(
-		state.device,
-		0,
-		1,
-		&pipeline_info,
-		nil,
-		&state.pipeline,
-	); res != .SUCCESS {
+	if res := vk.CreateGraphicsPipelines(state.device, 0, 1, &pipeline_info, nil, &state.pipeline);
+	   res != .SUCCESS {
 		fmt.eprintln("vulkan: vkCreateGraphicsPipelines failed:", res)
 		return .EINVAL
 	}
@@ -616,7 +612,7 @@ initialize_vulkan_pipeline :: proc(state: ^VulkanState) -> linux.Errno {
 }
 
 initialize_vulkan_commands :: proc(state: ^VulkanState) -> linux.Errno {
-	pool_info := vk.CommandPoolCreateInfo{
+	pool_info := vk.CommandPoolCreateInfo {
 		sType            = .COMMAND_POOL_CREATE_INFO,
 		flags            = {.RESET_COMMAND_BUFFER},
 		queueFamilyIndex = state.graphics_family,
@@ -627,7 +623,7 @@ initialize_vulkan_commands :: proc(state: ^VulkanState) -> linux.Errno {
 		return .EINVAL
 	}
 
-	alloc_info := vk.CommandBufferAllocateInfo{
+	alloc_info := vk.CommandBufferAllocateInfo {
 		sType              = .COMMAND_BUFFER_ALLOCATE_INFO,
 		commandPool        = state.command_pool,
 		level              = .PRIMARY,
@@ -639,7 +635,7 @@ initialize_vulkan_commands :: proc(state: ^VulkanState) -> linux.Errno {
 		return .EINVAL
 	}
 
-	fence_info := vk.FenceCreateInfo{
+	fence_info := vk.FenceCreateInfo {
 		sType = .FENCE_CREATE_INFO,
 		flags = {.SIGNALED},
 	}
@@ -675,7 +671,7 @@ render_frame :: proc(
 		return .EINVAL
 	}
 
-	begin_info := vk.CommandBufferBeginInfo{
+	begin_info := vk.CommandBufferBeginInfo {
 		sType = .COMMAND_BUFFER_BEGIN_INFO,
 		flags = {.ONE_TIME_SUBMIT},
 	}
@@ -684,20 +680,22 @@ render_frame :: proc(
 		return .EINVAL
 	}
 
-	clear_value := vk.ClearValue{color = {float32 = {0, 0, 0, 1}}}
-	render_pass_begin := vk.RenderPassBeginInfo{
-		sType       = .RENDER_PASS_BEGIN_INFO,
-		renderPass  = vk_state.render_pass,
+	clear_value := vk.ClearValue {
+		color = {float32 = {0, 0, 0, 1}},
+	}
+	render_pass_begin := vk.RenderPassBeginInfo {
+		sType = .RENDER_PASS_BEGIN_INFO,
+		renderPass = vk_state.render_pass,
 		framebuffer = buf.framebuffer,
-		renderArea  = vk.Rect2D{extent = {width = params.width, height = params.height}},
+		renderArea = vk.Rect2D{extent = {width = params.width, height = params.height}},
 		clearValueCount = 1,
-		pClearValues    = &clear_value,
+		pClearValues = &clear_value,
 	}
 	vk.CmdBeginRenderPass(vk_state.command_buffer, &render_pass_begin, .INLINE)
 
 	vk.CmdBindPipeline(vk_state.command_buffer, .GRAPHICS, vk_state.pipeline)
 
-	viewport := vk.Viewport{
+	viewport := vk.Viewport {
 		x        = 0,
 		y        = 0,
 		width    = f32(params.width),
@@ -707,10 +705,12 @@ render_frame :: proc(
 	}
 	vk.CmdSetViewport(vk_state.command_buffer, 0, 1, &viewport)
 
-	scissor := vk.Rect2D{extent = {width = params.width, height = params.height}}
+	scissor := vk.Rect2D {
+		extent = {width = params.width, height = params.height},
+	}
 	vk.CmdSetScissor(vk_state.command_buffer, 0, 1, &scissor)
 
-	push_data := [5]f32{
+	push_data := [5]f32 {
 		f32(params.width),
 		f32(params.height),
 		params.pointer_x,
@@ -730,13 +730,13 @@ render_frame :: proc(
 	vk.CmdDraw(vk_state.command_buffer, 3, 1, 0, 0)
 
 	// Draw shapes over the grid if any were submitted this frame
-	if len(vk_state.shapes.vertices) > 0 {
+	if len(vk_state.shapes.shapes) > 0 {
 		end_shapes(vk_state, vk_state.command_buffer, params.width, params.height) or_return
 	}
 
 	vk.CmdEndRenderPass(vk_state.command_buffer)
 
-	full_subresource_range := vk.ImageSubresourceRange{
+	full_subresource_range := vk.ImageSubresourceRange {
 		aspectMask     = {.COLOR},
 		baseMipLevel   = 0,
 		levelCount     = 1,
@@ -744,28 +744,28 @@ render_frame :: proc(
 		layerCount     = 1,
 	}
 
-	pre_copy_barriers := [2]vk.ImageMemoryBarrier{
+	pre_copy_barriers := [2]vk.ImageMemoryBarrier {
 		{
-			sType               = .IMAGE_MEMORY_BARRIER,
-			srcAccessMask       = {.COLOR_ATTACHMENT_WRITE},
-			dstAccessMask       = {.TRANSFER_READ},
-			oldLayout           = .GENERAL,
-			newLayout           = .TRANSFER_SRC_OPTIMAL,
+			sType = .IMAGE_MEMORY_BARRIER,
+			srcAccessMask = {.COLOR_ATTACHMENT_WRITE},
+			dstAccessMask = {.TRANSFER_READ},
+			oldLayout = .GENERAL,
+			newLayout = .TRANSFER_SRC_OPTIMAL,
 			srcQueueFamilyIndex = vk.QUEUE_FAMILY_IGNORED,
 			dstQueueFamilyIndex = vk.QUEUE_FAMILY_IGNORED,
-			image               = buf.render_image,
-			subresourceRange    = full_subresource_range,
+			image = buf.render_image,
+			subresourceRange = full_subresource_range,
 		},
 		{
-			sType               = .IMAGE_MEMORY_BARRIER,
-			srcAccessMask       = {},
-			dstAccessMask       = {.TRANSFER_WRITE},
-			oldLayout           = .UNDEFINED,
-			newLayout           = .GENERAL,
+			sType = .IMAGE_MEMORY_BARRIER,
+			srcAccessMask = {},
+			dstAccessMask = {.TRANSFER_WRITE},
+			oldLayout = .UNDEFINED,
+			newLayout = .GENERAL,
 			srcQueueFamilyIndex = vk.QUEUE_FAMILY_IGNORED,
 			dstQueueFamilyIndex = vk.QUEUE_FAMILY_IGNORED,
-			image               = buf.image,
-			subresourceRange    = full_subresource_range,
+			image = buf.image,
+			subresourceRange = full_subresource_range,
 		},
 	}
 	vk.CmdPipelineBarrier(
@@ -773,24 +773,30 @@ render_frame :: proc(
 		{.COLOR_ATTACHMENT_OUTPUT},
 		{.TRANSFER},
 		{},
-		0, nil,
-		0, nil,
-		u32(len(pre_copy_barriers)), &pre_copy_barriers[0],
+		0,
+		nil,
+		0,
+		nil,
+		u32(len(pre_copy_barriers)),
+		&pre_copy_barriers[0],
 	)
 
-	copy_region := vk.ImageCopy{
+	copy_region := vk.ImageCopy {
 		srcSubresource = {aspectMask = {.COLOR}, mipLevel = 0, baseArrayLayer = 0, layerCount = 1},
 		dstSubresource = {aspectMask = {.COLOR}, mipLevel = 0, baseArrayLayer = 0, layerCount = 1},
-		extent         = {width = params.width, height = params.height, depth = 1},
+		extent = {width = params.width, height = params.height, depth = 1},
 	}
 	vk.CmdCopyImage(
 		vk_state.command_buffer,
-		buf.render_image, .TRANSFER_SRC_OPTIMAL,
-		buf.image, .GENERAL,
-		1, &copy_region,
+		buf.render_image,
+		.TRANSFER_SRC_OPTIMAL,
+		buf.image,
+		.GENERAL,
+		1,
+		&copy_region,
 	)
 
-	post_copy_barrier := vk.ImageMemoryBarrier{
+	post_copy_barrier := vk.ImageMemoryBarrier {
 		sType               = .IMAGE_MEMORY_BARRIER,
 		srcAccessMask       = {.TRANSFER_WRITE},
 		dstAccessMask       = {.MEMORY_READ},
@@ -806,9 +812,12 @@ render_frame :: proc(
 		{.TRANSFER},
 		{.BOTTOM_OF_PIPE},
 		{},
-		0, nil,
-		0, nil,
-		1, &post_copy_barrier,
+		0,
+		nil,
+		0,
+		nil,
+		1,
+		&post_copy_barrier,
 	)
 
 	if res := vk.EndCommandBuffer(vk_state.command_buffer); res != .SUCCESS {
@@ -816,10 +825,10 @@ render_frame :: proc(
 		return .EINVAL
 	}
 
-	submit_info := vk.SubmitInfo{
-		sType                = .SUBMIT_INFO,
-		commandBufferCount   = 1,
-		pCommandBuffers      = &vk_state.command_buffer,
+	submit_info := vk.SubmitInfo {
+		sType              = .SUBMIT_INFO,
+		commandBufferCount = 1,
+		pCommandBuffers    = &vk_state.command_buffer,
 	}
 	if res := vk.QueueSubmit(vk_state.graphics_queue, 1, &submit_info, vk_state.render_fence);
 	   res != .SUCCESS {

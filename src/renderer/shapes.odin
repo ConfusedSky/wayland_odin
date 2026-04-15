@@ -3,11 +3,12 @@ package renderer
 import "core:fmt"
 import "core:math/linalg"
 import "core:mem"
+import "core:slice"
 import "core:sys/linux"
 import vk "vendor:vulkan"
 
-SHAPES_PER_BATCH  :: 682
-INDEX_BUFFER_LEN  :: 4096
+SHAPES_PER_BATCH :: 682
+INDEX_BUFFER_LEN :: 4096
 // Initial vertex buffer capacity in bytes — enough for 64 shapes
 INITIAL_SHAPE_BUFFER_CAPACITY :: 64 * 4 * size_of(ShapeVertex)
 
@@ -25,6 +26,17 @@ ShapeType :: enum int {
 	Circle      = 5,
 }
 
+Shape :: struct {
+	min_x, min_y, max_x, max_y: f32,
+	shape_type:                  f32,
+	p0, p1, p2:                  [2]f32,
+	fill_color:                  [4]f32,
+	border_color:                [4]f32,
+	border_width:                f32,
+	angle:                       f32,
+	zindex:                      f32,
+}
+
 // 76 bytes, 19 × f32.
 // All fields except pos carry the same value for all 4 vertices of a quad —
 // they are declared `flat` in the shaders (no interpolation).
@@ -37,11 +49,12 @@ ShapeVertex :: struct #packed {
 	fill_color:   [4]f32,
 	border_color: [4]f32,
 	border_width: f32,
-	angle:        f32,    // rotation in radians (counter-clockwise)
+	angle:        f32, // rotation in radians (counter-clockwise)
 }
 
 ShapeRenderer :: struct {
-	vertices:        [dynamic]ShapeVertex, // 4 verts per shape
+	shapes:          [dynamic]Shape,       // one entry per submitted shape, sorted before upload
+	vertices:        [dynamic]ShapeVertex, // per-frame scratch: sorted shapes expanded to 4 verts each
 	pipeline:        vk.Pipeline,
 	pipeline_layout: vk.PipelineLayout,
 	vert_shader:     vk.ShaderModule,
@@ -60,6 +73,7 @@ ShapeRenderer :: struct {
 
 initialize_shape_renderer :: proc(state: ^VulkanState) -> linux.Errno {
 	s := &state.shapes
+	s.shapes = make([dynamic]Shape)
 	s.vertices = make([dynamic]ShapeVertex)
 
 	// Static index buffer: pattern 0,1,2,2,1,3, 4,5,6,6,5,7, ...
@@ -67,7 +81,7 @@ initialize_shape_renderer :: proc(state: ^VulkanState) -> linux.Errno {
 	indices: [INDEX_BUFFER_LEN]u16
 	for q in 0 ..< SHAPES_PER_BATCH {
 		base := q * 4
-		i    := q * 6
+		i := q * 6
 		indices[i + 0] = u16(base + 0)
 		indices[i + 1] = u16(base + 1)
 		indices[i + 2] = u16(base + 2)
@@ -79,14 +93,13 @@ initialize_shape_renderer :: proc(state: ^VulkanState) -> linux.Errno {
 	index_size := vk.DeviceSize(size_of(indices))
 
 	// Host-visible index buffer (small, written once)
-	idx_buf_info := vk.BufferCreateInfo{
+	idx_buf_info := vk.BufferCreateInfo {
 		sType       = .BUFFER_CREATE_INFO,
 		size        = index_size,
 		usage       = {.INDEX_BUFFER},
 		sharingMode = .EXCLUSIVE,
 	}
-	if res := vk.CreateBuffer(state.device, &idx_buf_info, nil, &s.index_buffer);
-	   res != .SUCCESS {
+	if res := vk.CreateBuffer(state.device, &idx_buf_info, nil, &s.index_buffer); res != .SUCCESS {
 		fmt.eprintln("shapes: vkCreateBuffer (index) failed:", res)
 		return .EINVAL
 	}
@@ -99,13 +112,12 @@ initialize_shape_renderer :: proc(state: ^VulkanState) -> linux.Errno {
 
 	idx_mem_type := find_host_visible_memory(mem_props, idx_mem_reqs.memoryTypeBits) or_return
 
-	idx_alloc := vk.MemoryAllocateInfo{
+	idx_alloc := vk.MemoryAllocateInfo {
 		sType           = .MEMORY_ALLOCATE_INFO,
 		allocationSize  = idx_mem_reqs.size,
 		memoryTypeIndex = idx_mem_type,
 	}
-	if res := vk.AllocateMemory(state.device, &idx_alloc, nil, &s.index_memory);
-	   res != .SUCCESS {
+	if res := vk.AllocateMemory(state.device, &idx_alloc, nil, &s.index_memory); res != .SUCCESS {
 		fmt.eprintln("shapes: vkAllocateMemory (index) failed:", res)
 		return .ENOMEM
 	}
@@ -117,7 +129,7 @@ initialize_shape_renderer :: proc(state: ^VulkanState) -> linux.Errno {
 	mem.copy(idx_mapped, &indices[0], int(index_size))
 
 	// Flush if not HOST_COHERENT (must happen before unmap)
-	flush_idx := vk.MappedMemoryRange{
+	flush_idx := vk.MappedMemoryRange {
 		sType  = .MAPPED_MEMORY_RANGE,
 		memory = s.index_memory,
 		offset = 0,
@@ -170,6 +182,7 @@ destroy_shape_renderer :: proc(state: ^VulkanState) {
 		vk.DestroyShaderModule(state.device, s.vert_shader, nil)
 		s.vert_shader = 0
 	}
+	delete(s.shapes)
 	delete(s.vertices)
 }
 
@@ -178,18 +191,19 @@ destroy_shape_renderer :: proc(state: ^VulkanState) {
 // ---------------------------------------------------------------------------
 
 start_shapes :: proc(state: ^VulkanState) {
-	clear(&state.shapes.vertices)
+	clear(&state.shapes.shapes)
 }
 
 draw_line :: proc(
-	state:        ^VulkanState,
-	p0, p1:       [2]f32,
-	half_width:   f32,
-	cap:          LineCap,
-	fill_color:   [4]f32,
+	state: ^VulkanState,
+	p0, p1: [2]f32,
+	half_width: f32,
+	cap: LineCap,
+	fill_color: [4]f32,
 	border_color: [4]f32,
 	border_width: f32,
-	angle:        f32 = 0,
+	angle: f32 = 0,
+	zindex: f32 = 0,
 ) {
 	pad := half_width + border_width + 1
 	pivot := (p0 + p1) * 0.5
@@ -197,183 +211,318 @@ draw_line :: proc(
 		r := linalg.length(p1 - p0) * 0.5 + pad
 		append_quad(
 			state,
-			pivot.x - r, pivot.y - r, pivot.x + r, pivot.y + r,
+			pivot.x - r,
+			pivot.y - r,
+			pivot.x + r,
+			pivot.y + r,
 			f32(int(ShapeType.Line)),
-			p0, p1, {half_width, f32(int(cap))},
-			fill_color, border_color, border_width, angle,
+			p0,
+			p1,
+			{half_width, f32(int(cap))},
+			fill_color,
+			border_color,
+			border_width,
+			angle,
+			zindex,
 		)
 	} else {
 		append_quad(
 			state,
-			min(p0.x, p1.x) - pad, min(p0.y, p1.y) - pad,
-			max(p0.x, p1.x) + pad, max(p0.y, p1.y) + pad,
+			min(p0.x, p1.x) - pad,
+			min(p0.y, p1.y) - pad,
+			max(p0.x, p1.x) + pad,
+			max(p0.y, p1.y) + pad,
 			f32(int(ShapeType.Line)),
-			p0, p1, {half_width, f32(int(cap))},
-			fill_color, border_color, border_width, 0,
+			p0,
+			p1,
+			{half_width, f32(int(cap))},
+			fill_color,
+			border_color,
+			border_width,
+			0,
+			zindex,
 		)
 	}
 }
 
 draw_rect :: proc(
-	state:        ^VulkanState,
-	center:       [2]f32,
-	half_size:    [2]f32,
-	fill_color:   [4]f32,
+	state: ^VulkanState,
+	center: [2]f32,
+	half_size: [2]f32,
+	fill_color: [4]f32,
 	border_color: [4]f32,
 	border_width: f32,
-	angle:        f32 = 0,
+	angle: f32 = 0,
+	zindex: f32 = 0,
 ) {
 	pad := f32(1)
 	if angle != 0 {
 		r := linalg.length(half_size) + border_width + pad
 		append_quad(
 			state,
-			center.x - r, center.y - r, center.x + r, center.y + r,
+			center.x - r,
+			center.y - r,
+			center.x + r,
+			center.y + r,
 			f32(int(ShapeType.Rect)),
-			center, half_size, {},
-			fill_color, border_color, border_width, angle,
+			center,
+			half_size,
+			{},
+			fill_color,
+			border_color,
+			border_width,
+			angle,
+			zindex,
 		)
 	} else {
 		append_quad(
 			state,
-			center.x - half_size.x - pad, center.y - half_size.y - pad,
-			center.x + half_size.x + pad, center.y + half_size.y + pad,
+			center.x - half_size.x - pad,
+			center.y - half_size.y - pad,
+			center.x + half_size.x + pad,
+			center.y + half_size.y + pad,
 			f32(int(ShapeType.Rect)),
-			center, half_size, {},
-			fill_color, border_color, border_width, 0,
+			center,
+			half_size,
+			{},
+			fill_color,
+			border_color,
+			border_width,
+			0,
+			zindex,
 		)
 	}
 }
 
 draw_rounded_rect :: proc(
-	state:         ^VulkanState,
-	center:        [2]f32,
-	half_size:     [2]f32,
+	state: ^VulkanState,
+	center: [2]f32,
+	half_size: [2]f32,
 	corner_radius: f32,
-	fill_color:    [4]f32,
-	border_color:  [4]f32,
-	border_width:  f32,
-	angle:         f32 = 0,
+	fill_color: [4]f32,
+	border_color: [4]f32,
+	border_width: f32,
+	angle: f32 = 0,
+	zindex: f32 = 0,
 ) {
 	pad := f32(1)
 	if angle != 0 {
 		r := linalg.length(half_size) + border_width + pad
 		append_quad(
 			state,
-			center.x - r, center.y - r, center.x + r, center.y + r,
+			center.x - r,
+			center.y - r,
+			center.x + r,
+			center.y + r,
 			f32(int(ShapeType.RoundedRect)),
-			center, half_size, {corner_radius, 0},
-			fill_color, border_color, border_width, angle,
+			center,
+			half_size,
+			{corner_radius, 0},
+			fill_color,
+			border_color,
+			border_width,
+			angle,
+			zindex,
 		)
 	} else {
 		append_quad(
 			state,
-			center.x - half_size.x - pad, center.y - half_size.y - pad,
-			center.x + half_size.x + pad, center.y + half_size.y + pad,
+			center.x - half_size.x - pad,
+			center.y - half_size.y - pad,
+			center.x + half_size.x + pad,
+			center.y + half_size.y + pad,
 			f32(int(ShapeType.RoundedRect)),
-			center, half_size, {corner_radius, 0},
-			fill_color, border_color, border_width, 0,
+			center,
+			half_size,
+			{corner_radius, 0},
+			fill_color,
+			border_color,
+			border_width,
+			0,
+			zindex,
 		)
 	}
 }
 
 draw_triangle :: proc(
-	state:        ^VulkanState,
-	p0, p1, p2:   [2]f32,
-	fill_color:   [4]f32,
+	state: ^VulkanState,
+	p0, p1, p2: [2]f32,
+	fill_color: [4]f32,
 	border_color: [4]f32,
 	border_width: f32,
-	angle:        f32 = 0,
+	angle: f32 = 0,
+	zindex: f32 = 0,
 ) {
 	pad := f32(1)
 	centroid := (p0 + p1 + p2) / 3.0
 	if angle != 0 {
-		r := max(
-			linalg.length(p0 - centroid),
-			linalg.length(p1 - centroid),
-			linalg.length(p2 - centroid),
-		) + border_width + pad
+		r :=
+			max(
+				linalg.length(p0 - centroid),
+				linalg.length(p1 - centroid),
+				linalg.length(p2 - centroid),
+			) +
+			border_width +
+			pad
 		append_quad(
 			state,
-			centroid.x - r, centroid.y - r, centroid.x + r, centroid.y + r,
+			centroid.x - r,
+			centroid.y - r,
+			centroid.x + r,
+			centroid.y + r,
 			f32(int(ShapeType.Triangle)),
-			p0, p1, p2,
-			fill_color, border_color, border_width, angle,
+			p0,
+			p1,
+			p2,
+			fill_color,
+			border_color,
+			border_width,
+			angle,
+			zindex,
 		)
 	} else {
 		append_quad(
 			state,
-			min(p0.x, p1.x, p2.x) - pad, min(p0.y, p1.y, p2.y) - pad,
-			max(p0.x, p1.x, p2.x) + pad, max(p0.y, p1.y, p2.y) + pad,
+			min(p0.x, p1.x, p2.x) - pad,
+			min(p0.y, p1.y, p2.y) - pad,
+			max(p0.x, p1.x, p2.x) + pad,
+			max(p0.y, p1.y, p2.y) + pad,
 			f32(int(ShapeType.Triangle)),
-			p0, p1, p2,
-			fill_color, border_color, border_width, 0,
+			p0,
+			p1,
+			p2,
+			fill_color,
+			border_color,
+			border_width,
+			0,
+			zindex,
 		)
 	}
 }
 
 draw_oval :: proc(
-	state:        ^VulkanState,
-	center:       [2]f32,
-	radii:        [2]f32,
-	fill_color:   [4]f32,
+	state: ^VulkanState,
+	center: [2]f32,
+	radii: [2]f32,
+	fill_color: [4]f32,
 	border_color: [4]f32,
 	border_width: f32,
-	angle:        f32 = 0,
+	angle: f32 = 0,
+	zindex: f32 = 0,
 ) {
 	pad := f32(1)
 	if angle != 0 {
 		r := max(radii.x, radii.y) + border_width + pad
 		append_quad(
 			state,
-			center.x - r, center.y - r, center.x + r, center.y + r,
+			center.x - r,
+			center.y - r,
+			center.x + r,
+			center.y + r,
 			f32(int(ShapeType.Oval)),
-			center, radii, {},
-			fill_color, border_color, border_width, angle,
+			center,
+			radii,
+			{},
+			fill_color,
+			border_color,
+			border_width,
+			angle,
+			zindex,
 		)
 	} else {
 		append_quad(
 			state,
-			center.x - radii.x - pad, center.y - radii.y - pad,
-			center.x + radii.x + pad, center.y + radii.y + pad,
+			center.x - radii.x - pad,
+			center.y - radii.y - pad,
+			center.x + radii.x + pad,
+			center.y + radii.y + pad,
 			f32(int(ShapeType.Oval)),
-			center, radii, {},
-			fill_color, border_color, border_width, 0,
+			center,
+			radii,
+			{},
+			fill_color,
+			border_color,
+			border_width,
+			0,
+			zindex,
 		)
 	}
 }
 
 draw_circle :: proc(
-	state:        ^VulkanState,
-	center:       [2]f32,
-	radius:       f32,
-	fill_color:   [4]f32,
+	state: ^VulkanState,
+	center: [2]f32,
+	radius: f32,
+	fill_color: [4]f32,
 	border_color: [4]f32,
 	border_width: f32,
-	angle:        f32 = 0, // circles are rotationally symmetric; accepted for API consistency
+	angle: f32 = 0, // circles are rotationally symmetric; accepted for API consistency
+	zindex: f32 = 0,
 ) {
 	pad := f32(1)
 	r := radius + border_width + pad
 	append_quad(
 		state,
-		center.x - r, center.y - r, center.x + r, center.y + r,
+		center.x - r,
+		center.y - r,
+		center.x + r,
+		center.y + r,
 		f32(int(ShapeType.Circle)),
-		center, {}, {radius, 0},
-		fill_color, border_color, border_width, angle,
+		center,
+		{},
+		{radius, 0},
+		fill_color,
+		border_color,
+		border_width,
+		angle,
+		zindex,
 	)
 }
 
 // Called from render_frame after the grid draw, inside the render pass.
 end_shapes :: proc(
-	state:      ^VulkanState,
-	cmd:        vk.CommandBuffer,
-	surf_w:     u32,
-	surf_h:     u32,
+	state: ^VulkanState,
+	cmd: vk.CommandBuffer,
+	surf_w: u32,
+	surf_h: u32,
 ) -> linux.Errno {
 	s := &state.shapes
-	n_verts := len(s.vertices)
-	if n_verts == 0 do return nil
+	n_shapes := len(s.shapes)
+	if n_shapes == 0 do return nil
 
+	// Sort back-to-front by zindex; stable so equal-zindex shapes keep submission order
+	slice.stable_sort_by(s.shapes[:], proc(a, b: Shape) -> bool {
+		return a.zindex < b.zindex
+	})
+
+	// Expand sorted shapes into the vertex scratch buffer
+	clear(&s.vertices)
+	for sh in s.shapes {
+		corners := [4][2]f32 {
+			{sh.min_x, sh.min_y},
+			{sh.max_x, sh.min_y},
+			{sh.min_x, sh.max_y},
+			{sh.max_x, sh.max_y},
+		}
+		for c in corners {
+			append(
+				&s.vertices,
+				ShapeVertex {
+					pos          = c,
+					shape_type   = sh.shape_type,
+					p0           = sh.p0,
+					p1           = sh.p1,
+					p2           = sh.p2,
+					fill_color   = sh.fill_color,
+					border_color = sh.border_color,
+					border_width = sh.border_width,
+					angle        = sh.angle,
+				},
+			)
+		}
+	}
+
+	n_verts := len(s.vertices)
 	needed := vk.DeviceSize(n_verts * size_of(ShapeVertex))
 	if needed > s.buffer_capacity {
 		grow_shape_vertex_buffer(state, needed) or_return
@@ -382,7 +531,7 @@ end_shapes :: proc(
 	mem.copy(s.mapped_ptr, raw_data(s.vertices), int(needed))
 
 	// Flush if not HOST_COHERENT — harmless if it is
-	flush := vk.MappedMemoryRange{
+	flush := vk.MappedMemoryRange {
 		sType  = .MAPPED_MEMORY_RANGE,
 		memory = s.vk_memory,
 		offset = 0,
@@ -400,9 +549,9 @@ end_shapes :: proc(
 	vk.CmdBindIndexBuffer(cmd, s.index_buffer, 0, .UINT16)
 
 	total_shapes := n_verts / 4
-	batch_start  := 0
+	batch_start := 0
 	for batch_start < total_shapes {
-		count        := min(total_shapes - batch_start, SHAPES_PER_BATCH)
+		count := min(total_shapes - batch_start, SHAPES_PER_BATCH)
 		vertex_offset := i32(batch_start * 4)
 		vk.CmdDrawIndexed(cmd, u32(count * 6), 1, 0, vertex_offset, 0)
 		batch_start += count
@@ -417,26 +566,23 @@ end_shapes :: proc(
 
 @(private)
 append_quad :: proc(
-	state:        ^VulkanState,
-	min_x, min_y,
-	max_x, max_y: f32,
-	shape_type:   f32,
-	p0, p1, p2:   [2]f32,
-	fill_color:   [4]f32,
+	state: ^VulkanState,
+	min_x, min_y, max_x, max_y: f32,
+	shape_type: f32,
+	p0, p1, p2: [2]f32,
+	fill_color: [4]f32,
 	border_color: [4]f32,
 	border_width: f32,
-	angle:        f32,
+	angle: f32,
+	zindex: f32 = 0,
 ) {
-	s := &state.shapes
-	corners := [4][2]f32{
-		{min_x, min_y},
-		{max_x, min_y},
-		{min_x, max_y},
-		{max_x, max_y},
-	}
-	for c in corners {
-		append(&s.vertices, ShapeVertex{
-			pos          = c,
+	append(
+		&state.shapes.shapes,
+		Shape {
+			min_x        = min_x,
+			min_y        = min_y,
+			max_x        = max_x,
+			max_y        = max_y,
 			shape_type   = shape_type,
 			p0           = p0,
 			p1           = p1,
@@ -445,15 +591,19 @@ append_quad :: proc(
 			border_color = border_color,
 			border_width = border_width,
 			angle        = angle,
-		})
-	}
+			zindex       = zindex,
+		},
+	)
 }
 
 @(private)
 find_host_visible_memory :: proc(
 	mem_props: vk.PhysicalDeviceMemoryProperties,
 	type_bits: u32,
-) -> (u32, linux.Errno) {
+) -> (
+	u32,
+	linux.Errno,
+) {
 	// Prefer HOST_VISIBLE | HOST_COHERENT together
 	for i in 0 ..< mem_props.memoryTypeCount {
 		if type_bits & (1 << i) == 0 do continue
@@ -477,7 +627,7 @@ find_host_visible_memory :: proc(
 allocate_shape_vertex_buffer :: proc(state: ^VulkanState, capacity: vk.DeviceSize) -> linux.Errno {
 	s := &state.shapes
 
-	buf_info := vk.BufferCreateInfo{
+	buf_info := vk.BufferCreateInfo {
 		sType       = .BUFFER_CREATE_INFO,
 		size        = capacity,
 		usage       = {.VERTEX_BUFFER},
@@ -496,7 +646,7 @@ allocate_shape_vertex_buffer :: proc(state: ^VulkanState, capacity: vk.DeviceSiz
 
 	mem_type := find_host_visible_memory(mem_props, mem_reqs.memoryTypeBits) or_return
 
-	alloc_info := vk.MemoryAllocateInfo{
+	alloc_info := vk.MemoryAllocateInfo {
 		sType           = .MEMORY_ALLOCATE_INFO,
 		allocationSize  = mem_reqs.size,
 		memoryTypeIndex = mem_type,
@@ -509,8 +659,14 @@ allocate_shape_vertex_buffer :: proc(state: ^VulkanState, capacity: vk.DeviceSiz
 	}
 	vk.BindBufferMemory(state.device, s.vk_buffer, s.vk_memory, 0)
 
-	if res := vk.MapMemory(state.device, s.vk_memory, 0, vk.DeviceSize(vk.WHOLE_SIZE), {}, &s.mapped_ptr);
-	   res != .SUCCESS {
+	if res := vk.MapMemory(
+		state.device,
+		s.vk_memory,
+		0,
+		vk.DeviceSize(vk.WHOLE_SIZE),
+		{},
+		&s.mapped_ptr,
+	); res != .SUCCESS {
 		fmt.eprintln("shapes: vkMapMemory failed:", res)
 		return .EINVAL
 	}
@@ -545,7 +701,7 @@ initialize_shape_pipeline :: proc(state: ^VulkanState) -> linux.Errno {
 	vert_spv := #load("shaders/shapes.vert.spv")
 	frag_spv := #load("shaders/shapes.frag.spv")
 
-	vert_info := vk.ShaderModuleCreateInfo{
+	vert_info := vk.ShaderModuleCreateInfo {
 		sType    = .SHADER_MODULE_CREATE_INFO,
 		codeSize = len(vert_spv),
 		pCode    = cast([^]u32)raw_data(vert_spv),
@@ -556,7 +712,7 @@ initialize_shape_pipeline :: proc(state: ^VulkanState) -> linux.Errno {
 		return .EINVAL
 	}
 
-	frag_info := vk.ShaderModuleCreateInfo{
+	frag_info := vk.ShaderModuleCreateInfo {
 		sType    = .SHADER_MODULE_CREATE_INFO,
 		codeSize = len(frag_spv),
 		pCode    = cast([^]u32)raw_data(frag_spv),
@@ -568,12 +724,12 @@ initialize_shape_pipeline :: proc(state: ^VulkanState) -> linux.Errno {
 	}
 
 	// Push constant: surface_width + surface_height (vertex stage only)
-	push_range := vk.PushConstantRange{
+	push_range := vk.PushConstantRange {
 		stageFlags = {.VERTEX},
 		offset     = 0,
 		size       = 2 * size_of(f32),
 	}
-	layout_info := vk.PipelineLayoutCreateInfo{
+	layout_info := vk.PipelineLayoutCreateInfo {
 		sType                  = .PIPELINE_LAYOUT_CREATE_INFO,
 		pushConstantRangeCount = 1,
 		pPushConstantRanges    = &push_range,
@@ -585,25 +741,25 @@ initialize_shape_pipeline :: proc(state: ^VulkanState) -> linux.Errno {
 	}
 
 	// Vertex attribute descriptions — 10 attributes across 16 f32s (64 bytes)
-	binding := vk.VertexInputBindingDescription{
+	binding := vk.VertexInputBindingDescription {
 		binding   = 0,
 		stride    = size_of(ShapeVertex),
 		inputRate = .VERTEX,
 	}
 
-	attrs := [9]vk.VertexInputAttributeDescription{
-		{location = 0, binding = 0, format = .R32G32_SFLOAT,           offset =  0}, // pos
-		{location = 1, binding = 0, format = .R32_SFLOAT,              offset =  8}, // shape_type
-		{location = 2, binding = 0, format = .R32G32_SFLOAT,           offset = 12}, // p0
-		{location = 3, binding = 0, format = .R32G32_SFLOAT,           offset = 20}, // p1
-		{location = 4, binding = 0, format = .R32G32_SFLOAT,           offset = 28}, // p2
-		{location = 5, binding = 0, format = .R32G32B32A32_SFLOAT,     offset = 36}, // fill_color
-		{location = 6, binding = 0, format = .R32G32B32A32_SFLOAT,     offset = 52}, // border_color
-		{location = 7, binding = 0, format = .R32_SFLOAT,              offset = 68}, // border_width
-		{location = 8, binding = 0, format = .R32_SFLOAT,              offset = 72}, // angle
+	attrs := [?]vk.VertexInputAttributeDescription {
+		{location = 0, binding = 0, format = .R32G32_SFLOAT, offset = 0}, // pos
+		{location = 1, binding = 0, format = .R32_SFLOAT, offset = 8}, // shape_type
+		{location = 2, binding = 0, format = .R32G32_SFLOAT, offset = 12}, // p0
+		{location = 3, binding = 0, format = .R32G32_SFLOAT, offset = 20}, // p1
+		{location = 4, binding = 0, format = .R32G32_SFLOAT, offset = 28}, // p2
+		{location = 5, binding = 0, format = .R32G32B32A32_SFLOAT, offset = 36}, // fill_color
+		{location = 6, binding = 0, format = .R32G32B32A32_SFLOAT, offset = 52}, // border_color
+		{location = 7, binding = 0, format = .R32_SFLOAT, offset = 68}, // border_width
+		{location = 8, binding = 0, format = .R32_SFLOAT, offset = 72}, // angle
 	}
 
-	vertex_input := vk.PipelineVertexInputStateCreateInfo{
+	vertex_input := vk.PipelineVertexInputStateCreateInfo {
 		sType                           = .PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO,
 		vertexBindingDescriptionCount   = 1,
 		pVertexBindingDescriptions      = &binding,
@@ -611,40 +767,40 @@ initialize_shape_pipeline :: proc(state: ^VulkanState) -> linux.Errno {
 		pVertexAttributeDescriptions    = &attrs[0],
 	}
 
-	shader_stages := [2]vk.PipelineShaderStageCreateInfo{
+	shader_stages := [2]vk.PipelineShaderStageCreateInfo {
 		{
-			sType  = .PIPELINE_SHADER_STAGE_CREATE_INFO,
-			stage  = {.VERTEX},
+			sType = .PIPELINE_SHADER_STAGE_CREATE_INFO,
+			stage = {.VERTEX},
 			module = s.vert_shader,
-			pName  = "main",
+			pName = "main",
 		},
 		{
-			sType  = .PIPELINE_SHADER_STAGE_CREATE_INFO,
-			stage  = {.FRAGMENT},
+			sType = .PIPELINE_SHADER_STAGE_CREATE_INFO,
+			stage = {.FRAGMENT},
 			module = s.frag_shader,
-			pName  = "main",
+			pName = "main",
 		},
 	}
 
-	input_assembly := vk.PipelineInputAssemblyStateCreateInfo{
+	input_assembly := vk.PipelineInputAssemblyStateCreateInfo {
 		sType    = .PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO,
 		topology = .TRIANGLE_LIST,
 	}
 
 	dynamic_states := [2]vk.DynamicState{.VIEWPORT, .SCISSOR}
-	dynamic_state_info := vk.PipelineDynamicStateCreateInfo{
+	dynamic_state_info := vk.PipelineDynamicStateCreateInfo {
 		sType             = .PIPELINE_DYNAMIC_STATE_CREATE_INFO,
 		dynamicStateCount = u32(len(dynamic_states)),
 		pDynamicStates    = &dynamic_states[0],
 	}
 
-	viewport_state := vk.PipelineViewportStateCreateInfo{
+	viewport_state := vk.PipelineViewportStateCreateInfo {
 		sType         = .PIPELINE_VIEWPORT_STATE_CREATE_INFO,
 		viewportCount = 1,
 		scissorCount  = 1,
 	}
 
-	rasterizer := vk.PipelineRasterizationStateCreateInfo{
+	rasterizer := vk.PipelineRasterizationStateCreateInfo {
 		sType       = .PIPELINE_RASTERIZATION_STATE_CREATE_INFO,
 		polygonMode = .FILL,
 		cullMode    = {},
@@ -652,7 +808,7 @@ initialize_shape_pipeline :: proc(state: ^VulkanState) -> linux.Errno {
 		lineWidth   = 1.0,
 	}
 
-	multisample := vk.PipelineMultisampleStateCreateInfo{
+	multisample := vk.PipelineMultisampleStateCreateInfo {
 		sType                = .PIPELINE_MULTISAMPLE_STATE_CREATE_INFO,
 		rasterizationSamples = {._1},
 	}
@@ -660,7 +816,7 @@ initialize_shape_pipeline :: proc(state: ^VulkanState) -> linux.Errno {
 	// Premultiplied-alpha blending — the shader already multiplies RGB by alpha,
 	// so the source factor must be ONE (not SRC_ALPHA) to avoid a second multiply
 	// that would darken anti-aliased and translucent edges.
-	blend_attach := vk.PipelineColorBlendAttachmentState{
+	blend_attach := vk.PipelineColorBlendAttachmentState {
 		blendEnable         = true,
 		srcColorBlendFactor = .ONE,
 		dstColorBlendFactor = .ONE_MINUS_SRC_ALPHA,
@@ -670,13 +826,13 @@ initialize_shape_pipeline :: proc(state: ^VulkanState) -> linux.Errno {
 		alphaBlendOp        = .ADD,
 		colorWriteMask      = {.R, .G, .B, .A},
 	}
-	color_blending := vk.PipelineColorBlendStateCreateInfo{
+	color_blending := vk.PipelineColorBlendStateCreateInfo {
 		sType           = .PIPELINE_COLOR_BLEND_STATE_CREATE_INFO,
 		attachmentCount = 1,
 		pAttachments    = &blend_attach,
 	}
 
-	pipeline_info := vk.GraphicsPipelineCreateInfo{
+	pipeline_info := vk.GraphicsPipelineCreateInfo {
 		sType               = .GRAPHICS_PIPELINE_CREATE_INFO,
 		stageCount          = 2,
 		pStages             = &shader_stages[0],
