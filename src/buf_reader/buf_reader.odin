@@ -1,7 +1,7 @@
 package buf_reader
 
-import "core:mem"
 import utils "../utils"
+import "core:mem"
 
 read_u32 :: proc(buf: ^^u8, buf_size: ^int) -> u32 {
 	assert(buf_size^ >= size_of(u32))

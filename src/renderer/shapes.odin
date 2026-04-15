@@ -28,13 +28,13 @@ ShapeType :: enum int {
 
 Shape :: struct {
 	min_x, min_y, max_x, max_y: f32,
-	shape_type:                  f32,
-	p0, p1, p2:                  [2]f32,
-	fill_color:                  [4]f32,
-	border_color:                [4]f32,
-	border_width:                f32,
-	angle:                       f32,
-	zindex:                      f32,
+	shape_type:                 f32,
+	p0, p1, p2:                 [2]f32,
+	fill_color:                 [4]f32,
+	border_color:               [4]f32,
+	border_width:               f32,
+	angle:                      f32,
+	zindex:                     f32,
 }
 
 // 76 bytes, 19 × f32.
@@ -53,7 +53,7 @@ ShapeVertex :: struct #packed {
 }
 
 ShapeRenderer :: struct {
-	shapes:          [dynamic]Shape,       // one entry per submitted shape, sorted before upload
+	shapes:          [dynamic]Shape, // one entry per submitted shape, sorted before upload
 	vertices:        [dynamic]ShapeVertex, // per-frame scratch: sorted shapes expanded to 4 verts each
 	pipeline:        vk.Pipeline,
 	pipeline_layout: vk.PipelineLayout,
@@ -508,15 +508,15 @@ end_shapes :: proc(
 			append(
 				&s.vertices,
 				ShapeVertex {
-					pos          = c,
-					shape_type   = sh.shape_type,
-					p0           = sh.p0,
-					p1           = sh.p1,
-					p2           = sh.p2,
-					fill_color   = sh.fill_color,
+					pos = c,
+					shape_type = sh.shape_type,
+					p0 = sh.p0,
+					p1 = sh.p1,
+					p2 = sh.p2,
+					fill_color = sh.fill_color,
 					border_color = sh.border_color,
 					border_width = sh.border_width,
-					angle        = sh.angle,
+					angle = sh.angle,
 				},
 			)
 		}
@@ -579,19 +579,19 @@ append_quad :: proc(
 	append(
 		&state.shapes.shapes,
 		Shape {
-			min_x        = min_x,
-			min_y        = min_y,
-			max_x        = max_x,
-			max_y        = max_y,
-			shape_type   = shape_type,
-			p0           = p0,
-			p1           = p1,
-			p2           = p2,
-			fill_color   = fill_color,
+			min_x = min_x,
+			min_y = min_y,
+			max_x = max_x,
+			max_y = max_y,
+			shape_type = shape_type,
+			p0 = p0,
+			p1 = p1,
+			p2 = p2,
+			fill_color = fill_color,
 			border_color = border_color,
 			border_width = border_width,
-			angle        = angle,
-			zindex       = zindex,
+			angle = angle,
+			zindex = zindex,
 		},
 	)
 }
