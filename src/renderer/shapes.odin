@@ -17,6 +17,62 @@ LineCap :: enum int {
 	Round  = 1,
 }
 
+Style :: struct {
+	fill_color:   [4]f32,
+	border_color: [4]f32,
+	border_width: f32,
+}
+
+Transform :: struct {
+	angle:  f32,
+	zindex: f32,
+}
+
+LineData :: struct {
+	p0, p1:     [2]f32,
+	half_width: f32,
+	cap:        LineCap,
+}
+
+RectData :: struct {
+	center:    [2]f32,
+	half_size: [2]f32,
+}
+
+RoundedRectData :: struct {
+	center:        [2]f32,
+	half_size:     [2]f32,
+	corner_radius: f32,
+}
+
+TriangleData :: struct {
+	p0, p1, p2: [2]f32,
+}
+
+OvalData :: struct {
+	center: [2]f32,
+	radii:  [2]f32,
+}
+
+CircleData :: struct {
+	center: [2]f32,
+	radius: f32,
+}
+
+Shape :: struct {
+	data:      union {
+		LineData,
+		RectData,
+		RoundedRectData,
+		TriangleData,
+		OvalData,
+		CircleData,
+	},
+	transform: Transform,
+	style:     Style,
+}
+
+@(private)
 ShapeType :: enum int {
 	Line        = 0,
 	Rect        = 1,
@@ -24,17 +80,6 @@ ShapeType :: enum int {
 	Triangle    = 3,
 	Oval        = 4,
 	Circle      = 5,
-}
-
-Shape :: struct {
-	min_x, min_y, max_x, max_y: f32,
-	shape_type:                 f32,
-	p0, p1, p2:                 [2]f32,
-	fill_color:                 [4]f32,
-	border_color:               [4]f32,
-	border_width:               f32,
-	angle:                      f32,
-	zindex:                     f32,
 }
 
 // 76 bytes, 19 × f32.
@@ -194,289 +239,8 @@ start_shapes :: proc(state: ^VulkanState) {
 	clear(&state.shapes.shapes)
 }
 
-draw_line :: proc(
-	state: ^VulkanState,
-	p0, p1: [2]f32,
-	half_width: f32,
-	cap: LineCap,
-	fill_color: [4]f32,
-	border_color: [4]f32,
-	border_width: f32,
-	angle: f32 = 0,
-	zindex: f32 = 0,
-) {
-	pad := half_width + border_width + 1
-	pivot := (p0 + p1) * 0.5
-	if angle != 0 {
-		r := linalg.length(p1 - p0) * 0.5 + pad
-		append_quad(
-			state,
-			pivot.x - r,
-			pivot.y - r,
-			pivot.x + r,
-			pivot.y + r,
-			f32(int(ShapeType.Line)),
-			p0,
-			p1,
-			{half_width, f32(int(cap))},
-			fill_color,
-			border_color,
-			border_width,
-			angle,
-			zindex,
-		)
-	} else {
-		append_quad(
-			state,
-			min(p0.x, p1.x) - pad,
-			min(p0.y, p1.y) - pad,
-			max(p0.x, p1.x) + pad,
-			max(p0.y, p1.y) + pad,
-			f32(int(ShapeType.Line)),
-			p0,
-			p1,
-			{half_width, f32(int(cap))},
-			fill_color,
-			border_color,
-			border_width,
-			0,
-			zindex,
-		)
-	}
-}
-
-draw_rect :: proc(
-	state: ^VulkanState,
-	center: [2]f32,
-	half_size: [2]f32,
-	fill_color: [4]f32,
-	border_color: [4]f32,
-	border_width: f32,
-	angle: f32 = 0,
-	zindex: f32 = 0,
-) {
-	pad := f32(1)
-	if angle != 0 {
-		r := linalg.length(half_size) + border_width + pad
-		append_quad(
-			state,
-			center.x - r,
-			center.y - r,
-			center.x + r,
-			center.y + r,
-			f32(int(ShapeType.Rect)),
-			center,
-			half_size,
-			{},
-			fill_color,
-			border_color,
-			border_width,
-			angle,
-			zindex,
-		)
-	} else {
-		append_quad(
-			state,
-			center.x - half_size.x - pad,
-			center.y - half_size.y - pad,
-			center.x + half_size.x + pad,
-			center.y + half_size.y + pad,
-			f32(int(ShapeType.Rect)),
-			center,
-			half_size,
-			{},
-			fill_color,
-			border_color,
-			border_width,
-			0,
-			zindex,
-		)
-	}
-}
-
-draw_rounded_rect :: proc(
-	state: ^VulkanState,
-	center: [2]f32,
-	half_size: [2]f32,
-	corner_radius: f32,
-	fill_color: [4]f32,
-	border_color: [4]f32,
-	border_width: f32,
-	angle: f32 = 0,
-	zindex: f32 = 0,
-) {
-	pad := f32(1)
-	if angle != 0 {
-		r := linalg.length(half_size) + border_width + pad
-		append_quad(
-			state,
-			center.x - r,
-			center.y - r,
-			center.x + r,
-			center.y + r,
-			f32(int(ShapeType.RoundedRect)),
-			center,
-			half_size,
-			{corner_radius, 0},
-			fill_color,
-			border_color,
-			border_width,
-			angle,
-			zindex,
-		)
-	} else {
-		append_quad(
-			state,
-			center.x - half_size.x - pad,
-			center.y - half_size.y - pad,
-			center.x + half_size.x + pad,
-			center.y + half_size.y + pad,
-			f32(int(ShapeType.RoundedRect)),
-			center,
-			half_size,
-			{corner_radius, 0},
-			fill_color,
-			border_color,
-			border_width,
-			0,
-			zindex,
-		)
-	}
-}
-
-draw_triangle :: proc(
-	state: ^VulkanState,
-	p0, p1, p2: [2]f32,
-	fill_color: [4]f32,
-	border_color: [4]f32,
-	border_width: f32,
-	angle: f32 = 0,
-	zindex: f32 = 0,
-) {
-	pad := f32(1)
-	centroid := (p0 + p1 + p2) / 3.0
-	if angle != 0 {
-		r :=
-			max(
-				linalg.length(p0 - centroid),
-				linalg.length(p1 - centroid),
-				linalg.length(p2 - centroid),
-			) +
-			border_width +
-			pad
-		append_quad(
-			state,
-			centroid.x - r,
-			centroid.y - r,
-			centroid.x + r,
-			centroid.y + r,
-			f32(int(ShapeType.Triangle)),
-			p0,
-			p1,
-			p2,
-			fill_color,
-			border_color,
-			border_width,
-			angle,
-			zindex,
-		)
-	} else {
-		append_quad(
-			state,
-			min(p0.x, p1.x, p2.x) - pad,
-			min(p0.y, p1.y, p2.y) - pad,
-			max(p0.x, p1.x, p2.x) + pad,
-			max(p0.y, p1.y, p2.y) + pad,
-			f32(int(ShapeType.Triangle)),
-			p0,
-			p1,
-			p2,
-			fill_color,
-			border_color,
-			border_width,
-			0,
-			zindex,
-		)
-	}
-}
-
-draw_oval :: proc(
-	state: ^VulkanState,
-	center: [2]f32,
-	radii: [2]f32,
-	fill_color: [4]f32,
-	border_color: [4]f32,
-	border_width: f32,
-	angle: f32 = 0,
-	zindex: f32 = 0,
-) {
-	pad := f32(1)
-	if angle != 0 {
-		r := max(radii.x, radii.y) + border_width + pad
-		append_quad(
-			state,
-			center.x - r,
-			center.y - r,
-			center.x + r,
-			center.y + r,
-			f32(int(ShapeType.Oval)),
-			center,
-			radii,
-			{},
-			fill_color,
-			border_color,
-			border_width,
-			angle,
-			zindex,
-		)
-	} else {
-		append_quad(
-			state,
-			center.x - radii.x - pad,
-			center.y - radii.y - pad,
-			center.x + radii.x + pad,
-			center.y + radii.y + pad,
-			f32(int(ShapeType.Oval)),
-			center,
-			radii,
-			{},
-			fill_color,
-			border_color,
-			border_width,
-			0,
-			zindex,
-		)
-	}
-}
-
-draw_circle :: proc(
-	state: ^VulkanState,
-	center: [2]f32,
-	radius: f32,
-	fill_color: [4]f32,
-	border_color: [4]f32,
-	border_width: f32,
-	angle: f32 = 0, // circles are rotationally symmetric; accepted for API consistency
-	zindex: f32 = 0,
-) {
-	pad := f32(1)
-	r := radius + border_width + pad
-	append_quad(
-		state,
-		center.x - r,
-		center.y - r,
-		center.x + r,
-		center.y + r,
-		f32(int(ShapeType.Circle)),
-		center,
-		{},
-		{radius, 0},
-		fill_color,
-		border_color,
-		border_width,
-		angle,
-		zindex,
-	)
+draw_shape :: proc(state: ^VulkanState, shape: Shape) {
+	append(&state.shapes.shapes, shape)
 }
 
 // Called from render_frame after the grid draw, inside the render pass.
@@ -492,34 +256,13 @@ end_shapes :: proc(
 
 	// Sort back-to-front by zindex; stable so equal-zindex shapes keep submission order
 	slice.stable_sort_by(s.shapes[:], proc(a, b: Shape) -> bool {
-		return a.zindex < b.zindex
+		return a.transform.zindex < b.transform.zindex
 	})
 
 	// Expand sorted shapes into the vertex scratch buffer
 	clear(&s.vertices)
 	for sh in s.shapes {
-		corners := [4][2]f32 {
-			{sh.min_x, sh.min_y},
-			{sh.max_x, sh.min_y},
-			{sh.min_x, sh.max_y},
-			{sh.max_x, sh.max_y},
-		}
-		for c in corners {
-			append(
-				&s.vertices,
-				ShapeVertex {
-					pos = c,
-					shape_type = sh.shape_type,
-					p0 = sh.p0,
-					p1 = sh.p1,
-					p2 = sh.p2,
-					fill_color = sh.fill_color,
-					border_color = sh.border_color,
-					border_width = sh.border_width,
-					angle = sh.angle,
-				},
-			)
-		}
+		expand_shape(sh, &s.vertices)
 	}
 
 	n_verts := len(s.vertices)
@@ -565,35 +308,151 @@ end_shapes :: proc(
 // ---------------------------------------------------------------------------
 
 @(private)
-append_quad :: proc(
-	state: ^VulkanState,
-	min_x, min_y, max_x, max_y: f32,
-	shape_type: f32,
-	p0, p1, p2: [2]f32,
-	fill_color: [4]f32,
-	border_color: [4]f32,
-	border_width: f32,
-	angle: f32,
-	zindex: f32 = 0,
-) {
-	append(
-		&state.shapes.shapes,
-		Shape {
-			min_x = min_x,
-			min_y = min_y,
-			max_x = max_x,
-			max_y = max_y,
-			shape_type = shape_type,
-			p0 = p0,
-			p1 = p1,
-			p2 = p2,
-			fill_color = fill_color,
-			border_color = border_color,
-			border_width = border_width,
-			angle = angle,
-			zindex = zindex,
-		},
-	)
+expand_shape :: proc(sh: Shape, vertices: ^[dynamic]ShapeVertex) {
+	style := sh.style
+	angle := sh.transform.angle
+
+	min_x, min_y, max_x, max_y: f32
+	shape_type_f32: f32
+	gp0, gp1, gp2: [2]f32
+	vert_angle: f32
+
+	switch data in sh.data {
+	case LineData:
+		pad := data.half_width + style.border_width + 1
+		pivot := (data.p0 + data.p1) * 0.5
+		if angle != 0 {
+			r := linalg.length(data.p1 - data.p0) * 0.5 + pad
+			min_x = pivot.x - r
+			min_y = pivot.y - r
+			max_x = pivot.x + r
+			max_y = pivot.y + r
+			vert_angle = angle
+		} else {
+			min_x = min(data.p0.x, data.p1.x) - pad
+			min_y = min(data.p0.y, data.p1.y) - pad
+			max_x = max(data.p0.x, data.p1.x) + pad
+			max_y = max(data.p0.y, data.p1.y) + pad
+		}
+		shape_type_f32 = f32(int(ShapeType.Line))
+		gp0 = data.p0
+		gp1 = data.p1
+		gp2 = {data.half_width, f32(int(data.cap))}
+
+	case RectData:
+		pad := f32(1)
+		if angle != 0 {
+			r := linalg.length(data.half_size) + style.border_width + pad
+			min_x = data.center.x - r
+			min_y = data.center.y - r
+			max_x = data.center.x + r
+			max_y = data.center.y + r
+			vert_angle = angle
+		} else {
+			min_x = data.center.x - data.half_size.x - pad
+			min_y = data.center.y - data.half_size.y - pad
+			max_x = data.center.x + data.half_size.x + pad
+			max_y = data.center.y + data.half_size.y + pad
+		}
+		shape_type_f32 = f32(int(ShapeType.Rect))
+		gp0 = data.center
+		gp1 = data.half_size
+
+	case RoundedRectData:
+		pad := f32(1)
+		if angle != 0 {
+			r := linalg.length(data.half_size) + style.border_width + pad
+			min_x = data.center.x - r
+			min_y = data.center.y - r
+			max_x = data.center.x + r
+			max_y = data.center.y + r
+			vert_angle = angle
+		} else {
+			min_x = data.center.x - data.half_size.x - pad
+			min_y = data.center.y - data.half_size.y - pad
+			max_x = data.center.x + data.half_size.x + pad
+			max_y = data.center.y + data.half_size.y + pad
+		}
+		shape_type_f32 = f32(int(ShapeType.RoundedRect))
+		gp0 = data.center
+		gp1 = data.half_size
+		gp2 = {data.corner_radius, 0}
+
+	case TriangleData:
+		pad := f32(1)
+		centroid := (data.p0 + data.p1 + data.p2) / 3.0
+		if angle != 0 {
+			r :=
+				max(
+					linalg.length(data.p0 - centroid),
+					linalg.length(data.p1 - centroid),
+					linalg.length(data.p2 - centroid),
+				) +
+				style.border_width +
+				pad
+			min_x = centroid.x - r
+			min_y = centroid.y - r
+			max_x = centroid.x + r
+			max_y = centroid.y + r
+			vert_angle = angle
+		} else {
+			min_x = min(data.p0.x, data.p1.x, data.p2.x) - pad
+			min_y = min(data.p0.y, data.p1.y, data.p2.y) - pad
+			max_x = max(data.p0.x, data.p1.x, data.p2.x) + pad
+			max_y = max(data.p0.y, data.p1.y, data.p2.y) + pad
+		}
+		shape_type_f32 = f32(int(ShapeType.Triangle))
+		gp0 = data.p0
+		gp1 = data.p1
+		gp2 = data.p2
+
+	case OvalData:
+		pad := f32(1)
+		if angle != 0 {
+			r := max(data.radii.x, data.radii.y) + style.border_width + pad
+			min_x = data.center.x - r
+			min_y = data.center.y - r
+			max_x = data.center.x + r
+			max_y = data.center.y + r
+			vert_angle = angle
+		} else {
+			min_x = data.center.x - data.radii.x - pad
+			min_y = data.center.y - data.radii.y - pad
+			max_x = data.center.x + data.radii.x + pad
+			max_y = data.center.y + data.radii.y + pad
+		}
+		shape_type_f32 = f32(int(ShapeType.Oval))
+		gp0 = data.center
+		gp1 = data.radii
+
+	case CircleData:
+		r := data.radius + style.border_width + 1
+		min_x = data.center.x - r
+		min_y = data.center.y - r
+		max_x = data.center.x + r
+		max_y = data.center.y + r
+		shape_type_f32 = f32(int(ShapeType.Circle))
+		gp0 = data.center
+		gp2 = {data.radius, 0}
+	}
+
+	corners := [4][2]f32{{min_x, min_y}, {max_x, min_y}, {min_x, max_y}, {max_x, max_y}}
+	for c in corners {
+		append(
+			vertices,
+			ShapeVertex {
+				pos = c,
+				shape_type = shape_type_f32,
+				p0 = gp0,
+				p1 = gp1,
+				p2 = gp2,
+				fill_color = style.fill_color,
+				border_color = style.border_color,
+				border_width = style.border_width,
+				angle = vert_angle,
+			},
+		)
+	}
 }
 
 @(private)

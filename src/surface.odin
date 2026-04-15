@@ -158,81 +158,134 @@ draw_next_frame :: proc(state: ^state_t) -> Errno {
 	// Submit shapes for this frame
 	renderer.start_shapes(&state.vulkan)
 
-	renderer.draw_line(
+	renderer.draw_shape(
 		&state.vulkan,
-		{100, 100},
-		{400, 200},
-		8,
-		.Round,
-		{1, 0.2, 0.2, 1},
-		{1, 1, 1, 1},
-		4,
+		{
+			data = renderer.LineData {
+				p0 = {100, 100},
+				p1 = {400, 200},
+				half_width = 8,
+				cap = .Round,
+			},
+			style = {fill_color = {1, 0.2, 0.2, 1}, border_color = {1, 1, 1, 1}, border_width = 4},
+		},
 	)
-	renderer.draw_line(
+	renderer.draw_shape(
 		&state.vulkan,
-		{100, 160},
-		{400, 260},
-		12,
-		.Square,
-		{0.2, 0.5, 1, 0.8},
-		{1, 1, 1, 1},
-		4,
-	)
-
-	renderer.draw_rect(&state.vulkan, {200, 320}, {80, 40}, {0.3, 0.8, 0.3, 1}, {1, 1, 0, 1}, 4)
-	renderer.draw_rect(
-		&state.vulkan,
-		{340, 320},
-		{60, 60},
-		{0.8, 0.3, 0.8, 0.5},
-		{1, 1, 1, 1},
-		4,
-		math.PI / 4,
+		{
+			data = renderer.LineData {
+				p0 = {100, 160},
+				p1 = {400, 260},
+				half_width = 12,
+				cap = .Square,
+			},
+			style = {
+				fill_color = {0.2, 0.5, 1, 0.8},
+				border_color = {1, 1, 1, 1},
+				border_width = 4,
+			},
+		},
 	)
 
-	renderer.draw_rounded_rect(
+	renderer.draw_shape(
 		&state.vulkan,
-		{160, 430},
-		{70, 35},
-		12,
-		{1, 0.6, 0.1, 1},
-		{1, 1, 1, 1},
-		4,
+		{
+			data = renderer.RectData{center = {200, 320}, half_size = {80, 40}},
+			style = {
+				fill_color = {0.3, 0.8, 0.3, 1},
+				border_color = {1, 1, 0, 1},
+				border_width = 4,
+			},
+		},
 	)
-	renderer.draw_rounded_rect(
+	renderer.draw_shape(
 		&state.vulkan,
-		{310, 430},
-		{80, 40},
-		20,
-		{0.1, 0.8, 0.9, 0.7},
-		{1, 1, 1, 1},
-		4,
-	)
-
-	renderer.draw_triangle(
-		&state.vulkan,
-		{510, 110},
-		{590, 260},
-		{430, 260},
-		{1, 0.4, 0, 1},
-		{1, 1, 1, 1},
-		4,
-	)
-	renderer.draw_triangle(
-		&state.vulkan,
-		{510, 290},
-		{570, 390},
-		{450, 390},
-		{0.5, 0, 1, 0.8},
-		{1, 1, 1, 1},
-		4,
+		{
+			data = renderer.RectData{center = {340, 320}, half_size = {60, 60}},
+			transform = {angle = math.PI / 4, zindex = 1},
+			style = {
+				fill_color = {0.8, 0.3, 0.8, 0.5},
+				border_color = {1, 1, 1, 1},
+				border_width = 4,
+			},
+		},
 	)
 
-	renderer.draw_oval(&state.vulkan, {210, 530}, {90, 40}, {1, 0.2, 0.5, 1}, {1, 1, 1, 1}, 4)
-	renderer.draw_oval(&state.vulkan, {390, 530}, {40, 70}, {0.2, 0.9, 0.4, 0.6}, {1, 1, 1, 1}, 4)
+	renderer.draw_shape(
+		&state.vulkan,
+		{
+			data = renderer.RoundedRectData {
+				center = {160, 430},
+				half_size = {70, 35},
+				corner_radius = 12,
+			},
+			style = {fill_color = {1, 0.6, 0.1, 1}, border_color = {1, 1, 1, 1}, border_width = 4},
+		},
+	)
+	renderer.draw_shape(
+		&state.vulkan,
+		{
+			data = renderer.RoundedRectData {
+				center = {310, 430},
+				half_size = {80, 40},
+				corner_radius = 20,
+			},
+			style = {
+				fill_color = {0.1, 0.8, 0.9, 0.7},
+				border_color = {1, 1, 1, 1},
+				border_width = 4,
+			},
+		},
+	)
 
-	renderer.draw_circle(&state.vulkan, {530, 430}, 45, {1, 1, 1, 1}, {}, 0)
-	renderer.draw_circle(&state.vulkan, {640, 430}, 30, {0, 0.6, 1, 0.7}, {1, 1, 1, 1}, 4)
+	renderer.draw_shape(
+		&state.vulkan,
+		{
+			data = renderer.TriangleData{p0 = {510, 110}, p1 = {590, 260}, p2 = {430, 260}},
+			style = {fill_color = {1, 0.4, 0, 1}, border_color = {1, 1, 1, 1}, border_width = 4},
+		},
+	)
+	renderer.draw_shape(
+		&state.vulkan,
+		{
+			data = renderer.TriangleData{p0 = {510, 290}, p1 = {570, 390}, p2 = {450, 390}},
+			style = {fill_color = {0.5, 0, 1, 0.8}, border_color = {1, 1, 1, 1}, border_width = 4},
+		},
+	)
+
+	renderer.draw_shape(
+		&state.vulkan,
+		{
+			data = renderer.OvalData{center = {210, 530}, radii = {90, 40}},
+			style = {fill_color = {1, 0.2, 0.5, 1}, border_color = {1, 1, 1, 1}, border_width = 4},
+		},
+	)
+	renderer.draw_shape(
+		&state.vulkan,
+		{
+			data = renderer.OvalData{center = {390, 530}, radii = {40, 70}},
+			style = {
+				fill_color = {0.2, 0.9, 0.4, 0.6},
+				border_color = {1, 1, 1, 1},
+				border_width = 4,
+			},
+		},
+	)
+
+	renderer.draw_shape(
+		&state.vulkan,
+		{
+			data = renderer.CircleData{center = {530, 430}, radius = 45},
+			style = {fill_color = {1, 1, 1, 1}},
+		},
+	)
+	renderer.draw_shape(
+		&state.vulkan,
+		{
+			data = renderer.CircleData{center = {640, 430}, radius = 30},
+			style = {fill_color = {0, 0.6, 1, 0.7}, border_color = {1, 1, 1, 1}, border_width = 4},
+		},
+	)
 
 	renderer.render_frame(
 		&state.vulkan,
