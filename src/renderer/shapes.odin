@@ -29,19 +29,19 @@ Transform :: struct {
 }
 
 LineData :: struct {
-	p0, p1:     [2]f32,
-	half_width: f32,
-	cap:        LineCap,
+	p0, p1: [2]f32,
+	width:  f32,
+	cap:    LineCap,
 }
 
 RectData :: struct {
-	center:    [2]f32,
-	half_size: [2]f32,
+	pos:  [2]f32,
+	size: [2]f32,
 }
 
 RoundedRectData :: struct {
-	center:        [2]f32,
-	half_size:     [2]f32,
+	pos:           [2]f32,
+	size:          [2]f32,
 	corner_radius: f32,
 }
 
@@ -319,7 +319,8 @@ expand_shape :: proc(sh: Shape, vertices: ^[dynamic]ShapeVertex) {
 
 	switch data in sh.data {
 	case LineData:
-		pad := data.half_width + style.border_width + 1
+		half_width := data.width / 2
+		pad := half_width + style.border_width + 1
 		pivot := (data.p0 + data.p1) * 0.5
 		if angle != 0 {
 			r := linalg.length(data.p1 - data.p0) * 0.5 + pad
@@ -337,45 +338,49 @@ expand_shape :: proc(sh: Shape, vertices: ^[dynamic]ShapeVertex) {
 		shape_type_f32 = f32(int(ShapeType.Line))
 		gp0 = data.p0
 		gp1 = data.p1
-		gp2 = {data.half_width, f32(int(data.cap))}
+		gp2 = {half_width, f32(int(data.cap))}
 
 	case RectData:
+		half_size := data.size / 2
+		center := data.pos + half_size
 		pad := f32(1)
 		if angle != 0 {
-			r := linalg.length(data.half_size) + style.border_width + pad
-			min_x = data.center.x - r
-			min_y = data.center.y - r
-			max_x = data.center.x + r
-			max_y = data.center.y + r
+			r := linalg.length(half_size) + style.border_width + pad
+			min_x = center.x - r
+			min_y = center.y - r
+			max_x = center.x + r
+			max_y = center.y + r
 			vert_angle = angle
 		} else {
-			min_x = data.center.x - data.half_size.x - pad
-			min_y = data.center.y - data.half_size.y - pad
-			max_x = data.center.x + data.half_size.x + pad
-			max_y = data.center.y + data.half_size.y + pad
+			min_x = center.x - half_size.x - pad
+			min_y = center.y - half_size.y - pad
+			max_x = center.x + half_size.x + pad
+			max_y = center.y + half_size.y + pad
 		}
 		shape_type_f32 = f32(int(ShapeType.Rect))
-		gp0 = data.center
-		gp1 = data.half_size
+		gp0 = center
+		gp1 = half_size
 
 	case RoundedRectData:
+		half_size := data.size / 2
+		center := data.pos + half_size
 		pad := f32(1)
 		if angle != 0 {
-			r := linalg.length(data.half_size) + style.border_width + pad
-			min_x = data.center.x - r
-			min_y = data.center.y - r
-			max_x = data.center.x + r
-			max_y = data.center.y + r
+			r := linalg.length(half_size) + style.border_width + pad
+			min_x = center.x - r
+			min_y = center.y - r
+			max_x = center.x + r
+			max_y = center.y + r
 			vert_angle = angle
 		} else {
-			min_x = data.center.x - data.half_size.x - pad
-			min_y = data.center.y - data.half_size.y - pad
-			max_x = data.center.x + data.half_size.x + pad
-			max_y = data.center.y + data.half_size.y + pad
+			min_x = center.x - half_size.x - pad
+			min_y = center.y - half_size.y - pad
+			max_x = center.x + half_size.x + pad
+			max_y = center.y + half_size.y + pad
 		}
 		shape_type_f32 = f32(int(ShapeType.RoundedRect))
-		gp0 = data.center
-		gp1 = data.half_size
+		gp0 = center
+		gp1 = half_size
 		gp2 = {data.corner_radius, 0}
 
 	case TriangleData:

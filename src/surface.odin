@@ -161,24 +161,14 @@ draw_next_frame :: proc(state: ^state_t) -> Errno {
 	renderer.draw_shape(
 		&state.vulkan,
 		{
-			data = renderer.LineData {
-				p0 = {100, 100},
-				p1 = {400, 200},
-				half_width = 8,
-				cap = .Round,
-			},
+			data = renderer.LineData{p0 = {100, 100}, p1 = {400, 200}, width = 16, cap = .Round},
 			style = {fill_color = {1, 0.2, 0.2, 1}, border_color = {1, 1, 1, 1}, border_width = 4},
 		},
 	)
 	renderer.draw_shape(
 		&state.vulkan,
 		{
-			data = renderer.LineData {
-				p0 = {100, 160},
-				p1 = {400, 260},
-				half_width = 12,
-				cap = .Square,
-			},
+			data = renderer.LineData{p0 = {100, 160}, p1 = {400, 260}, width = 24, cap = .Square},
 			style = {
 				fill_color = {0.2, 0.5, 1, 0.8},
 				border_color = {1, 1, 1, 1},
@@ -190,7 +180,7 @@ draw_next_frame :: proc(state: ^state_t) -> Errno {
 	renderer.draw_shape(
 		&state.vulkan,
 		{
-			data = renderer.RectData{center = {200, 320}, half_size = {80, 40}},
+			data = renderer.RectData{pos = {120, 280}, size = {160, 80}},
 			style = {
 				fill_color = {0.3, 0.8, 0.3, 1},
 				border_color = {1, 1, 0, 1},
@@ -201,7 +191,7 @@ draw_next_frame :: proc(state: ^state_t) -> Errno {
 	renderer.draw_shape(
 		&state.vulkan,
 		{
-			data = renderer.RectData{center = {340, 320}, half_size = {60, 60}},
+			data = renderer.RectData{pos = {280, 260}, size = {120, 120}},
 			transform = {angle = math.PI / 4, zindex = 1},
 			style = {
 				fill_color = {0.8, 0.3, 0.8, 0.5},
@@ -214,11 +204,7 @@ draw_next_frame :: proc(state: ^state_t) -> Errno {
 	renderer.draw_shape(
 		&state.vulkan,
 		{
-			data = renderer.RoundedRectData {
-				center = {160, 430},
-				half_size = {70, 35},
-				corner_radius = 12,
-			},
+			data = renderer.RoundedRectData{pos = {90, 395}, size = {140, 70}, corner_radius = 12},
 			style = {fill_color = {1, 0.6, 0.1, 1}, border_color = {1, 1, 1, 1}, border_width = 4},
 		},
 	)
@@ -226,8 +212,8 @@ draw_next_frame :: proc(state: ^state_t) -> Errno {
 		&state.vulkan,
 		{
 			data = renderer.RoundedRectData {
-				center = {310, 430},
-				half_size = {80, 40},
+				pos = {230, 390},
+				size = {160, 80},
 				corner_radius = 20,
 			},
 			style = {
