@@ -100,10 +100,7 @@ ShapeVertex :: struct #packed {
 ShapeRenderer :: struct {
 	shape_data:      [dynamic]ShapeData, // one entry per submitted shape, sorted before upload
 	vertices:        [dynamic]ShapeVertex, // per-frame scratch: sorted shapes expanded to 4 verts each
-	pipeline:        vk.Pipeline,
-	pipeline_layout: vk.PipelineLayout,
-	vert_shader:     vk.ShaderModule,
-	frag_shader:     vk.ShaderModule,
+	pipeline:        Pipeline,
 	index_buffer:    vk.Buffer,
 	index_memory:    vk.DeviceMemory,
 	vk_buffer:       vk.Buffer,
@@ -216,22 +213,7 @@ destroy_shape_renderer :: proc(state: ^VulkanState) {
 		s.index_buffer = 0
 		s.index_memory = 0
 	}
-	if s.pipeline != 0 {
-		vk.DestroyPipeline(state.device, s.pipeline, nil)
-		s.pipeline = 0
-	}
-	if s.pipeline_layout != 0 {
-		vk.DestroyPipelineLayout(state.device, s.pipeline_layout, nil)
-		s.pipeline_layout = 0
-	}
-	if s.frag_shader != 0 {
-		vk.DestroyShaderModule(state.device, s.frag_shader, nil)
-		s.frag_shader = 0
-	}
-	if s.vert_shader != 0 {
-		vk.DestroyShaderModule(state.device, s.vert_shader, nil)
-		s.vert_shader = 0
-	}
+	destroy_pipeline(state, &s.pipeline)
 	delete(s.shape_data)
 	delete(s.vertices)
 }
@@ -287,10 +269,10 @@ end_shapes :: proc(
 	}
 	vk.FlushMappedMemoryRanges(state.device, 1, &flush)
 
-	vk.CmdBindPipeline(cmd, .GRAPHICS, shapes.pipeline)
+	vk.CmdBindPipeline(cmd, .GRAPHICS, shapes.pipeline.vk_pipeline)
 
 	push := [2]f32{f32(surf_w), f32(surf_h)}
-	vk.CmdPushConstants(cmd, shapes.pipeline_layout, {.VERTEX}, 0, size_of(push), &push)
+	vk.CmdPushConstants(cmd, shapes.pipeline.layout, {.VERTEX}, 0, size_of(push), &push)
 
 	offset: vk.DeviceSize = 0
 	vk.CmdBindVertexBuffers(cmd, 0, 1, &shapes.vk_buffer, &offset)
@@ -531,24 +513,10 @@ grow_shape_vertex_buffer :: proc(state: ^VulkanState, needed: vk.DeviceSize) -> 
 initialize_shape_pipeline :: proc(state: ^VulkanState) -> linux.Errno {
 	s := &state.shape_renderer
 
-	s.vert_shader = create_shader_module(state.device, #load("shaders/shapes.vert.spv")) or_return
-	s.frag_shader = create_shader_module(state.device, #load("shaders/shapes.frag.spv")) or_return
-
-	// Push constant: surface_width + surface_height (vertex stage only)
-	push_range := vk.PushConstantRange {
+	push_constant_range := vk.PushConstantRange {
 		stageFlags = {.VERTEX},
 		offset     = 0,
 		size       = 2 * size_of(f32),
-	}
-	layout_info := vk.PipelineLayoutCreateInfo {
-		sType                  = .PIPELINE_LAYOUT_CREATE_INFO,
-		pushConstantRangeCount = 1,
-		pPushConstantRanges    = &push_range,
-	}
-	if res := vk.CreatePipelineLayout(state.device, &layout_info, nil, &s.pipeline_layout);
-	   res != .SUCCESS {
-		fmt.eprintln("shapes: vkCreatePipelineLayout failed:", res)
-		return .EINVAL
 	}
 
 	// Vertex attribute descriptions — 10 attributes across 16 f32s (64 bytes)
@@ -578,91 +546,13 @@ initialize_shape_pipeline :: proc(state: ^VulkanState) -> linux.Errno {
 		pVertexAttributeDescriptions    = &attrs[0],
 	}
 
-	shader_stages := [2]vk.PipelineShaderStageCreateInfo {
-		{
-			sType = .PIPELINE_SHADER_STAGE_CREATE_INFO,
-			stage = {.VERTEX},
-			module = s.vert_shader,
-			pName = "main",
-		},
-		{
-			sType = .PIPELINE_SHADER_STAGE_CREATE_INFO,
-			stage = {.FRAGMENT},
-			module = s.frag_shader,
-			pName = "main",
-		},
+	info := PipelineInfo {
+		vertex_spv     = #load("shaders/shapes.vert.spv"),
+		fragment_spv   = #load("shaders/shapes.frag.spv"),
+		vertex_input   = vertex_input,
+		push_constants = {push_constant_range},
 	}
-
-	input_assembly := vk.PipelineInputAssemblyStateCreateInfo {
-		sType    = .PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO,
-		topology = .TRIANGLE_LIST,
-	}
-
-	dynamic_states := [2]vk.DynamicState{.VIEWPORT, .SCISSOR}
-	dynamic_state_info := vk.PipelineDynamicStateCreateInfo {
-		sType             = .PIPELINE_DYNAMIC_STATE_CREATE_INFO,
-		dynamicStateCount = u32(len(dynamic_states)),
-		pDynamicStates    = &dynamic_states[0],
-	}
-
-	viewport_state := vk.PipelineViewportStateCreateInfo {
-		sType         = .PIPELINE_VIEWPORT_STATE_CREATE_INFO,
-		viewportCount = 1,
-		scissorCount  = 1,
-	}
-
-	rasterizer := vk.PipelineRasterizationStateCreateInfo {
-		sType       = .PIPELINE_RASTERIZATION_STATE_CREATE_INFO,
-		polygonMode = .FILL,
-		cullMode    = {},
-		frontFace   = .CLOCKWISE,
-		lineWidth   = 1.0,
-	}
-
-	multisample := vk.PipelineMultisampleStateCreateInfo {
-		sType                = .PIPELINE_MULTISAMPLE_STATE_CREATE_INFO,
-		rasterizationSamples = {._1},
-	}
-
-	// Premultiplied-alpha blending — the shader already multiplies RGB by alpha,
-	// so the source factor must be ONE (not SRC_ALPHA) to avoid a second multiply
-	// that would darken anti-aliased and translucent edges.
-	blend_attach := vk.PipelineColorBlendAttachmentState {
-		blendEnable         = true,
-		srcColorBlendFactor = .ONE,
-		dstColorBlendFactor = .ONE_MINUS_SRC_ALPHA,
-		colorBlendOp        = .ADD,
-		srcAlphaBlendFactor = .ONE,
-		dstAlphaBlendFactor = .ONE_MINUS_SRC_ALPHA,
-		alphaBlendOp        = .ADD,
-		colorWriteMask      = {.R, .G, .B, .A},
-	}
-	color_blending := vk.PipelineColorBlendStateCreateInfo {
-		sType           = .PIPELINE_COLOR_BLEND_STATE_CREATE_INFO,
-		attachmentCount = 1,
-		pAttachments    = &blend_attach,
-	}
-
-	pipeline_info := vk.GraphicsPipelineCreateInfo {
-		sType               = .GRAPHICS_PIPELINE_CREATE_INFO,
-		stageCount          = 2,
-		pStages             = &shader_stages[0],
-		pVertexInputState   = &vertex_input,
-		pInputAssemblyState = &input_assembly,
-		pViewportState      = &viewport_state,
-		pRasterizationState = &rasterizer,
-		pMultisampleState   = &multisample,
-		pColorBlendState    = &color_blending,
-		pDynamicState       = &dynamic_state_info,
-		layout              = s.pipeline_layout,
-		renderPass          = state.render_pass,
-		subpass             = 0,
-	}
-	if res := vk.CreateGraphicsPipelines(state.device, 0, 1, &pipeline_info, nil, &s.pipeline);
-	   res != .SUCCESS {
-		fmt.eprintln("shapes: vkCreateGraphicsPipelines failed:", res)
-		return .EINVAL
-	}
+	initialize_rendering_pipeline(state, &s.pipeline, &info)
 
 	fmt.printfln("shapes: pipeline ready")
 	return nil

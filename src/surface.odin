@@ -110,7 +110,7 @@ initialize_surface :: proc(state: ^state_t) -> Errno {
 	xdg_toplevel.set_min_size(&state.xdg_toplevel, 50, 50) or_return
 	wl_surface.commit(&state.wl_surface) or_return
 
-	renderer.initialize_vulkan_pipeline(&state.vulkan) or_return
+	renderer.initialize_grid_pipeline(&state.vulkan) or_return
 	renderer.initialize_vulkan_commands(&state.vulkan) or_return
 	renderer.initialize_shape_renderer(&state.vulkan) or_return
 

@@ -1,7 +1,6 @@
 package renderer
 
 import "base:runtime"
-import "core:c"
 import "core:dynlib"
 import "core:fmt"
 import "core:sys/linux"
@@ -12,20 +11,6 @@ DRM_FORMAT_ARGB8888 :: u32(0x34325241)
 // Linear (unmodified) layout
 DRM_FORMAT_MOD_LINEAR :: u64(0)
 
-VulkanBuffer :: struct {
-	// LINEAR image: DMA-buf exported to the compositor (written to via vkCmdCopyImage)
-	image:             vk.Image,
-	memory:            vk.DeviceMemory,
-	dma_fd:            linux.Fd,
-	stride:            u32,
-	offset:            u32,
-	// OPTIMAL image: GPU render target (rendered into, then copied to the LINEAR image)
-	render_image:      vk.Image,
-	render_memory:     vk.DeviceMemory,
-	render_image_view: vk.ImageView,
-	framebuffer:       vk.Framebuffer,
-}
-
 VulkanState :: struct {
 	lib:             dynlib.Library,
 	instance:        vk.Instance,
@@ -35,10 +20,7 @@ VulkanState :: struct {
 	graphics_queue:  vk.Queue,
 	graphics_family: u32,
 	render_pass:     vk.RenderPass,
-	vert_shader:     vk.ShaderModule,
-	frag_shader:     vk.ShaderModule,
-	pipeline_layout: vk.PipelineLayout,
-	pipeline:        vk.Pipeline,
+	grid_pipeline:   Pipeline,
 	command_pool:    vk.CommandPool,
 	command_buffer:  vk.CommandBuffer,
 	render_fence:    vk.Fence,
@@ -233,194 +215,6 @@ initialize_vulkan :: proc(state: ^VulkanState) -> linux.Errno {
 	vk.GetDeviceQueue(state.device, state.graphics_family, 0, &state.graphics_queue)
 	fmt.printfln("vulkan: device and graphics queue ready")
 
-	return nil
-}
-
-allocate_vulkan_buffer :: proc(
-	vk_state: ^VulkanState,
-	w: u32,
-	h: u32,
-) -> (
-	result: VulkanBuffer,
-	err: linux.Errno,
-) {
-	buf: VulkanBuffer
-
-	mem_props: vk.PhysicalDeviceMemoryProperties
-	vk.GetPhysicalDeviceMemoryProperties(vk_state.physical_device, &mem_props)
-
-	ext_mem_image_info := vk.ExternalMemoryImageCreateInfo {
-		sType       = .EXTERNAL_MEMORY_IMAGE_CREATE_INFO,
-		handleTypes = {.DMA_BUF_EXT},
-	}
-	linear_image_info := vk.ImageCreateInfo {
-		sType = .IMAGE_CREATE_INFO,
-		pNext = &ext_mem_image_info,
-		imageType = .D2,
-		format = .B8G8R8A8_UNORM,
-		extent = {width = w, height = h, depth = 1},
-		mipLevels = 1,
-		arrayLayers = 1,
-		samples = {._1},
-		tiling = .LINEAR,
-		usage = {.TRANSFER_DST},
-		sharingMode = .EXCLUSIVE,
-		initialLayout = .UNDEFINED,
-	}
-	if res := vk.CreateImage(vk_state.device, &linear_image_info, nil, &buf.image);
-	   res != .SUCCESS {
-		fmt.eprintln("vulkan: vkCreateImage (linear) failed:", res)
-		return {}, .EINVAL
-	}
-	defer if err != nil do vk.DestroyImage(vk_state.device, buf.image, nil)
-
-	linear_mem_reqs: vk.MemoryRequirements
-	vk.GetImageMemoryRequirements(vk_state.device, buf.image, &linear_mem_reqs)
-
-	linear_mem_type_idx := find_memory_type(
-		mem_props,
-		linear_mem_reqs.memoryTypeBits,
-		{.HOST_VISIBLE},
-	) or_return
-
-	export_alloc_info := vk.ExportMemoryAllocateInfo {
-		sType       = .EXPORT_MEMORY_ALLOCATE_INFO,
-		handleTypes = {.DMA_BUF_EXT},
-	}
-	linear_alloc_info := vk.MemoryAllocateInfo {
-		sType           = .MEMORY_ALLOCATE_INFO,
-		pNext           = &export_alloc_info,
-		allocationSize  = linear_mem_reqs.size,
-		memoryTypeIndex = linear_mem_type_idx,
-	}
-	if res := vk.AllocateMemory(vk_state.device, &linear_alloc_info, nil, &buf.memory);
-	   res != .SUCCESS {
-		fmt.eprintln("vulkan: vkAllocateMemory (linear) failed:", res)
-		return {}, .ENOMEM
-	}
-	defer if err != nil do vk.FreeMemory(vk_state.device, buf.memory, nil)
-
-	if res := vk.BindImageMemory(vk_state.device, buf.image, buf.memory, 0); res != .SUCCESS {
-		fmt.eprintln("vulkan: vkBindImageMemory (linear) failed:", res)
-		return {}, .EINVAL
-	}
-
-	fd_info := vk.MemoryGetFdInfoKHR {
-		sType      = .MEMORY_GET_FD_INFO_KHR,
-		memory     = buf.memory,
-		handleType = {.DMA_BUF_EXT},
-	}
-	raw_fd: c.int
-	if res := vk.GetMemoryFdKHR(vk_state.device, &fd_info, &raw_fd); res != .SUCCESS {
-		fmt.eprintln("vulkan: vkGetMemoryFdKHR failed:", res)
-		return {}, .EINVAL
-	}
-	buf.dma_fd = linux.Fd(raw_fd)
-	defer if err != nil do linux.close(buf.dma_fd)
-
-	subresource := vk.ImageSubresource {
-		aspectMask = {.COLOR},
-		mipLevel   = 0,
-		arrayLayer = 0,
-	}
-	layout: vk.SubresourceLayout
-	vk.GetImageSubresourceLayout(vk_state.device, buf.image, &subresource, &layout)
-	buf.stride = u32(layout.rowPitch)
-	buf.offset = u32(layout.offset)
-
-	render_image_info := vk.ImageCreateInfo {
-		sType = .IMAGE_CREATE_INFO,
-		imageType = .D2,
-		format = .B8G8R8A8_UNORM,
-		extent = {width = w, height = h, depth = 1},
-		mipLevels = 1,
-		arrayLayers = 1,
-		samples = {._1},
-		tiling = .OPTIMAL,
-		usage = {.COLOR_ATTACHMENT, .TRANSFER_SRC},
-		sharingMode = .EXCLUSIVE,
-		initialLayout = .UNDEFINED,
-	}
-	if res := vk.CreateImage(vk_state.device, &render_image_info, nil, &buf.render_image);
-	   res != .SUCCESS {
-		fmt.eprintln("vulkan: vkCreateImage (render) failed:", res)
-		return {}, .EINVAL
-	}
-	defer if err != nil do vk.DestroyImage(vk_state.device, buf.render_image, nil)
-
-	render_mem_reqs: vk.MemoryRequirements
-	vk.GetImageMemoryRequirements(vk_state.device, buf.render_image, &render_mem_reqs)
-
-	render_mem_type_idx := find_memory_type(
-		mem_props,
-		render_mem_reqs.memoryTypeBits,
-		{.DEVICE_LOCAL},
-		vk.MemoryPropertyFlags{},
-	) or_return
-
-	render_alloc_info := vk.MemoryAllocateInfo {
-		sType           = .MEMORY_ALLOCATE_INFO,
-		allocationSize  = render_mem_reqs.size,
-		memoryTypeIndex = render_mem_type_idx,
-	}
-	if res := vk.AllocateMemory(vk_state.device, &render_alloc_info, nil, &buf.render_memory);
-	   res != .SUCCESS {
-		fmt.eprintln("vulkan: vkAllocateMemory (render) failed:", res)
-		return {}, .ENOMEM
-	}
-	defer if err != nil do vk.FreeMemory(vk_state.device, buf.render_memory, nil)
-
-	if res := vk.BindImageMemory(vk_state.device, buf.render_image, buf.render_memory, 0);
-	   res != .SUCCESS {
-		fmt.eprintln("vulkan: vkBindImageMemory (render) failed:", res)
-		return {}, .EINVAL
-	}
-
-	view_info := vk.ImageViewCreateInfo {
-		sType = .IMAGE_VIEW_CREATE_INFO,
-		image = buf.render_image,
-		viewType = .D2,
-		format = .B8G8R8A8_UNORM,
-		subresourceRange = vk.ImageSubresourceRange {
-			aspectMask = {.COLOR},
-			baseMipLevel = 0,
-			levelCount = 1,
-			baseArrayLayer = 0,
-			layerCount = 1,
-		},
-	}
-	if res := vk.CreateImageView(vk_state.device, &view_info, nil, &buf.render_image_view);
-	   res != .SUCCESS {
-		fmt.eprintln("vulkan: vkCreateImageView failed:", res)
-		return {}, .EINVAL
-	}
-	defer if err != nil do vk.DestroyImageView(vk_state.device, buf.render_image_view, nil)
-
-	fb_info := vk.FramebufferCreateInfo {
-		sType           = .FRAMEBUFFER_CREATE_INFO,
-		renderPass      = vk_state.render_pass,
-		attachmentCount = 1,
-		pAttachments    = &buf.render_image_view,
-		width           = w,
-		height          = h,
-		layers          = 1,
-	}
-	if res := vk.CreateFramebuffer(vk_state.device, &fb_info, nil, &buf.framebuffer);
-	   res != .SUCCESS {
-		fmt.eprintln("vulkan: vkCreateFramebuffer failed:", res)
-		return {}, .EINVAL
-	}
-
-	fmt.printfln(
-		"vulkan: buffer allocated — stride=%v offset=%v fd=%v",
-		buf.stride,
-		buf.offset,
-		buf.dma_fd,
-	)
-	return buf, nil
-}
-
-initialize_vulkan_pipeline :: proc(state: ^VulkanState) -> linux.Errno {
 	color_attachment := vk.AttachmentDescription {
 		format         = .B8G8R8A8_UNORM,
 		samples        = {._1},
@@ -463,112 +257,28 @@ initialize_vulkan_pipeline :: proc(state: ^VulkanState) -> linux.Errno {
 		return .EINVAL
 	}
 
-	state.vert_shader = create_shader_module(
-		state.device,
-		#load("shaders/grid.vert.spv"),
-	) or_return
-	state.frag_shader = create_shader_module(
-		state.device,
-		#load("shaders/grid.frag.spv"),
-	) or_return
+	return nil
+}
 
+initialize_grid_pipeline :: proc(state: ^VulkanState) -> linux.Errno {
 	// Push constant: 5 × f32
 	push_constant_range := vk.PushConstantRange {
 		stageFlags = {.FRAGMENT},
 		offset     = 0,
 		size       = 5 * size_of(f32),
 	}
-	layout_info := vk.PipelineLayoutCreateInfo {
-		sType                  = .PIPELINE_LAYOUT_CREATE_INFO,
-		pushConstantRangeCount = 1,
-		pPushConstantRanges    = &push_constant_range,
-	}
-	if res := vk.CreatePipelineLayout(state.device, &layout_info, nil, &state.pipeline_layout);
-	   res != .SUCCESS {
-		fmt.eprintln("vulkan: vkCreatePipelineLayout failed:", res)
-		return .EINVAL
-	}
-
-	shader_stages := [2]vk.PipelineShaderStageCreateInfo {
-		{
-			sType = .PIPELINE_SHADER_STAGE_CREATE_INFO,
-			stage = {.VERTEX},
-			module = state.vert_shader,
-			pName = "main",
-		},
-		{
-			sType = .PIPELINE_SHADER_STAGE_CREATE_INFO,
-			stage = {.FRAGMENT},
-			module = state.frag_shader,
-			pName = "main",
-		},
-	}
 
 	vertex_input_info := vk.PipelineVertexInputStateCreateInfo {
 		sType = .PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO,
 	}
 
-	input_assembly := vk.PipelineInputAssemblyStateCreateInfo {
-		sType    = .PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO,
-		topology = .TRIANGLE_LIST,
+	info := PipelineInfo {
+		push_constants = {push_constant_range},
+		vertex_input   = vertex_input_info,
+		vertex_spv     = #load("shaders/grid.vert.spv"),
+		fragment_spv   = #load("shaders/grid.frag.spv"),
 	}
-
-	dynamic_states := [2]vk.DynamicState{.VIEWPORT, .SCISSOR}
-	dynamic_state_info := vk.PipelineDynamicStateCreateInfo {
-		sType             = .PIPELINE_DYNAMIC_STATE_CREATE_INFO,
-		dynamicStateCount = u32(len(dynamic_states)),
-		pDynamicStates    = &dynamic_states[0],
-	}
-
-	viewport_state := vk.PipelineViewportStateCreateInfo {
-		sType         = .PIPELINE_VIEWPORT_STATE_CREATE_INFO,
-		viewportCount = 1,
-		scissorCount  = 1,
-	}
-
-	rasterizer := vk.PipelineRasterizationStateCreateInfo {
-		sType       = .PIPELINE_RASTERIZATION_STATE_CREATE_INFO,
-		polygonMode = .FILL,
-		cullMode    = {},
-		frontFace   = .CLOCKWISE,
-		lineWidth   = 1.0,
-	}
-
-	multisample := vk.PipelineMultisampleStateCreateInfo {
-		sType                = .PIPELINE_MULTISAMPLE_STATE_CREATE_INFO,
-		rasterizationSamples = {._1},
-	}
-
-	// Opaque — grid pipeline needs no blending
-	color_blend_attachment := vk.PipelineColorBlendAttachmentState {
-		colorWriteMask = {.R, .G, .B, .A},
-	}
-	color_blending := vk.PipelineColorBlendStateCreateInfo {
-		sType           = .PIPELINE_COLOR_BLEND_STATE_CREATE_INFO,
-		attachmentCount = 1,
-		pAttachments    = &color_blend_attachment,
-	}
-
-	pipeline_info := vk.GraphicsPipelineCreateInfo {
-		sType               = .GRAPHICS_PIPELINE_CREATE_INFO,
-		stageCount          = u32(len(shader_stages)),
-		pStages             = &shader_stages[0],
-		pVertexInputState   = &vertex_input_info,
-		pInputAssemblyState = &input_assembly,
-		pViewportState      = &viewport_state,
-		pRasterizationState = &rasterizer,
-		pMultisampleState   = &multisample,
-		pColorBlendState    = &color_blending,
-		pDynamicState       = &dynamic_state_info,
-		layout              = state.pipeline_layout,
-		renderPass          = state.render_pass,
-		subpass             = 0,
-	}
-	if res := vk.CreateGraphicsPipelines(state.device, 0, 1, &pipeline_info, nil, &state.pipeline);
-	   res != .SUCCESS {
-		fmt.eprintln("vulkan: vkCreateGraphicsPipelines failed:", res)
-		return .EINVAL
-	}
+	initialize_rendering_pipeline(state, &state.grid_pipeline, &info)
 
 	fmt.printfln("vulkan: grid pipeline ready")
 	return nil
@@ -656,7 +366,7 @@ render_frame :: proc(
 	}
 	vk.CmdBeginRenderPass(vk_state.command_buffer, &render_pass_begin, .INLINE)
 
-	vk.CmdBindPipeline(vk_state.command_buffer, .GRAPHICS, vk_state.pipeline)
+	vk.CmdBindPipeline(vk_state.command_buffer, .GRAPHICS, vk_state.grid_pipeline.vk_pipeline)
 
 	viewport := vk.Viewport {
 		x        = 0,
@@ -682,7 +392,7 @@ render_frame :: proc(
 	}
 	vk.CmdPushConstants(
 		vk_state.command_buffer,
-		vk_state.pipeline_layout,
+		vk_state.grid_pipeline.layout,
 		{.FRAGMENT},
 		0,
 		u32(size_of(push_data)),
@@ -808,41 +518,11 @@ render_frame :: proc(
 	return nil
 }
 
-free_vulkan_buffer :: proc(vk_state: ^VulkanState, buf: ^VulkanBuffer) {
-	if buf.framebuffer != 0 {
-		vk.DestroyFramebuffer(vk_state.device, buf.framebuffer, nil)
-		buf.framebuffer = 0
-	}
-	if buf.render_image_view != 0 {
-		vk.DestroyImageView(vk_state.device, buf.render_image_view, nil)
-		buf.render_image_view = 0
-	}
-	if buf.render_image != 0 {
-		vk.DestroyImage(vk_state.device, buf.render_image, nil)
-		buf.render_image = 0
-	}
-	if buf.render_memory != 0 {
-		vk.FreeMemory(vk_state.device, buf.render_memory, nil)
-		buf.render_memory = 0
-	}
-	if buf.dma_fd > 0 {
-		linux.close(buf.dma_fd)
-		buf.dma_fd = -1
-	}
-	if buf.image != 0 {
-		vk.DestroyImage(vk_state.device, buf.image, nil)
-		buf.image = 0
-	}
-	if buf.memory != 0 {
-		vk.FreeMemory(vk_state.device, buf.memory, nil)
-		buf.memory = 0
-	}
-}
-
 cleanup_vulkan :: proc(state: ^VulkanState) {
 	if state.device != nil {
 		vk.DeviceWaitIdle(state.device)
 		destroy_shape_renderer(state)
+		destroy_pipeline(state, &state.grid_pipeline)
 		if state.render_fence != 0 {
 			vk.DestroyFence(state.device, state.render_fence, nil)
 			state.render_fence = 0
@@ -850,22 +530,6 @@ cleanup_vulkan :: proc(state: ^VulkanState) {
 		if state.command_pool != 0 {
 			vk.DestroyCommandPool(state.device, state.command_pool, nil)
 			state.command_pool = 0
-		}
-		if state.pipeline != 0 {
-			vk.DestroyPipeline(state.device, state.pipeline, nil)
-			state.pipeline = 0
-		}
-		if state.pipeline_layout != 0 {
-			vk.DestroyPipelineLayout(state.device, state.pipeline_layout, nil)
-			state.pipeline_layout = 0
-		}
-		if state.frag_shader != 0 {
-			vk.DestroyShaderModule(state.device, state.frag_shader, nil)
-			state.frag_shader = 0
-		}
-		if state.vert_shader != 0 {
-			vk.DestroyShaderModule(state.device, state.vert_shader, nil)
-			state.vert_shader = 0
 		}
 		if state.render_pass != 0 {
 			vk.DestroyRenderPass(state.device, state.render_pass, nil)
