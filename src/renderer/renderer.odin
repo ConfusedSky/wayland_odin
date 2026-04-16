@@ -277,18 +277,11 @@ allocate_vulkan_buffer :: proc(
 	linear_mem_reqs: vk.MemoryRequirements
 	vk.GetImageMemoryRequirements(vk_state.device, buf.image, &linear_mem_reqs)
 
-	linear_mem_type_idx: u32 = max(u32)
-	for i in 0 ..< mem_props.memoryTypeCount {
-		if linear_mem_reqs.memoryTypeBits & (1 << i) == 0 do continue
-		if .HOST_VISIBLE in mem_props.memoryTypes[i].propertyFlags {
-			linear_mem_type_idx = i
-			break
-		}
-	}
-	if linear_mem_type_idx == max(u32) {
-		fmt.eprintln("vulkan: no host-visible memory type found for linear image")
-		return {}, .ENOMEM
-	}
+	linear_mem_type_idx := find_memory_type(
+		mem_props,
+		linear_mem_reqs.memoryTypeBits,
+		{.HOST_VISIBLE},
+	) or_return
 
 	export_alloc_info := vk.ExportMemoryAllocateInfo {
 		sType       = .EXPORT_MEMORY_ALLOCATE_INFO,
@@ -358,26 +351,12 @@ allocate_vulkan_buffer :: proc(
 	render_mem_reqs: vk.MemoryRequirements
 	vk.GetImageMemoryRequirements(vk_state.device, buf.render_image, &render_mem_reqs)
 
-	render_mem_type_idx: u32 = max(u32)
-	for i in 0 ..< mem_props.memoryTypeCount {
-		if render_mem_reqs.memoryTypeBits & (1 << i) == 0 do continue
-		if .DEVICE_LOCAL in mem_props.memoryTypes[i].propertyFlags {
-			render_mem_type_idx = i
-			break
-		}
-	}
-	if render_mem_type_idx == max(u32) {
-		for i in 0 ..< mem_props.memoryTypeCount {
-			if render_mem_reqs.memoryTypeBits & (1 << i) != 0 {
-				render_mem_type_idx = i
-				break
-			}
-		}
-	}
-	if render_mem_type_idx == max(u32) {
-		fmt.eprintln("vulkan: no compatible memory type found for render image")
-		return {}, .ENOMEM
-	}
+	render_mem_type_idx := find_memory_type(
+		mem_props,
+		render_mem_reqs.memoryTypeBits,
+		{.DEVICE_LOCAL},
+		vk.MemoryPropertyFlags{},
+	) or_return
 
 	render_alloc_info := vk.MemoryAllocateInfo {
 		sType           = .MEMORY_ALLOCATE_INFO,
@@ -484,30 +463,14 @@ initialize_vulkan_pipeline :: proc(state: ^VulkanState) -> linux.Errno {
 		return .EINVAL
 	}
 
-	vert_spv := #load("shaders/grid.vert.spv")
-	frag_spv := #load("shaders/grid.frag.spv")
-
-	vert_info := vk.ShaderModuleCreateInfo {
-		sType    = .SHADER_MODULE_CREATE_INFO,
-		codeSize = len(vert_spv),
-		pCode    = cast([^]u32)raw_data(vert_spv),
-	}
-	if res := vk.CreateShaderModule(state.device, &vert_info, nil, &state.vert_shader);
-	   res != .SUCCESS {
-		fmt.eprintln("vulkan: vkCreateShaderModule (vert) failed:", res)
-		return .EINVAL
-	}
-
-	frag_info := vk.ShaderModuleCreateInfo {
-		sType    = .SHADER_MODULE_CREATE_INFO,
-		codeSize = len(frag_spv),
-		pCode    = cast([^]u32)raw_data(frag_spv),
-	}
-	if res := vk.CreateShaderModule(state.device, &frag_info, nil, &state.frag_shader);
-	   res != .SUCCESS {
-		fmt.eprintln("vulkan: vkCreateShaderModule (frag) failed:", res)
-		return .EINVAL
-	}
+	state.vert_shader = create_shader_module(
+		state.device,
+		#load("shaders/grid.vert.spv"),
+	) or_return
+	state.frag_shader = create_shader_module(
+		state.device,
+		#load("shaders/grid.frag.spv"),
+	) or_return
 
 	// Push constant: 5 × f32
 	push_constant_range := vk.PushConstantRange {

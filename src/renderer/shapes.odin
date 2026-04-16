@@ -155,7 +155,12 @@ initialize_shape_renderer :: proc(state: ^VulkanState) -> linux.Errno {
 	idx_mem_reqs: vk.MemoryRequirements
 	vk.GetBufferMemoryRequirements(state.device, s.index_buffer, &idx_mem_reqs)
 
-	idx_mem_type := find_host_visible_memory(mem_props, idx_mem_reqs.memoryTypeBits) or_return
+	idx_mem_type := find_memory_type(
+		mem_props,
+		idx_mem_reqs.memoryTypeBits,
+		{.HOST_VISIBLE, .HOST_COHERENT},
+		vk.MemoryPropertyFlags{.HOST_VISIBLE},
+	) or_return
 
 	idx_alloc := vk.MemoryAllocateInfo {
 		sType           = .MEMORY_ALLOCATE_INFO,
@@ -320,7 +325,7 @@ expand_shape :: proc(sh: ShapeData, vertices: ^[dynamic]ShapeVertex) {
 	switch data in sh.data {
 	case LineData:
 		half_width := data.width / 2
-		pad := half_width + style.border_width + 1
+		pad := half_width + 1
 		pivot := (data.p0 + data.p1) * 0.5
 		if angle != 0 {
 			r := linalg.length(data.p1 - data.p0) * 0.5 + pad
@@ -355,7 +360,7 @@ expand_shape :: proc(sh: ShapeData, vertices: ^[dynamic]ShapeVertex) {
 		}
 		pad := f32(1)
 		if angle != 0 {
-			r := linalg.length(half_size) + style.border_width + pad
+			r := linalg.length(half_size) + pad
 			min_x = center.x - r
 			min_y = center.y - r
 			max_x = center.x + r
@@ -380,7 +385,6 @@ expand_shape :: proc(sh: ShapeData, vertices: ^[dynamic]ShapeVertex) {
 					linalg.length(data.p1 - centroid),
 					linalg.length(data.p2 - centroid),
 				) +
-				style.border_width +
 				pad
 			min_x = centroid.x - r
 			min_y = centroid.y - r
@@ -401,7 +405,7 @@ expand_shape :: proc(sh: ShapeData, vertices: ^[dynamic]ShapeVertex) {
 	case OvalData:
 		pad := f32(1)
 		if angle != 0 {
-			r := max(data.radii.x, data.radii.y) + style.border_width + pad
+			r := max(data.radii.x, data.radii.y) + pad
 			min_x = data.center.x - r
 			min_y = data.center.y - r
 			max_x = data.center.x + r
@@ -418,7 +422,7 @@ expand_shape :: proc(sh: ShapeData, vertices: ^[dynamic]ShapeVertex) {
 		gp1 = data.radii
 
 	case CircleData:
-		r := data.radius + style.border_width + 1
+		r := data.radius + 1
 		min_x = data.center.x - r
 		min_y = data.center.y - r
 		max_x = data.center.x + r
@@ -448,33 +452,6 @@ expand_shape :: proc(sh: ShapeData, vertices: ^[dynamic]ShapeVertex) {
 }
 
 @(private)
-find_host_visible_memory :: proc(
-	mem_props: vk.PhysicalDeviceMemoryProperties,
-	type_bits: u32,
-) -> (
-	u32,
-	linux.Errno,
-) {
-	// Prefer HOST_VISIBLE | HOST_COHERENT together
-	for i in 0 ..< mem_props.memoryTypeCount {
-		if type_bits & (1 << i) == 0 do continue
-		flags := mem_props.memoryTypes[i].propertyFlags
-		if .HOST_VISIBLE in flags && .HOST_COHERENT in flags {
-			return i, nil
-		}
-	}
-	// Fall back to HOST_VISIBLE only
-	for i in 0 ..< mem_props.memoryTypeCount {
-		if type_bits & (1 << i) == 0 do continue
-		if .HOST_VISIBLE in mem_props.memoryTypes[i].propertyFlags {
-			return i, nil
-		}
-	}
-	fmt.eprintln("shapes: no host-visible memory type found")
-	return 0, .ENOMEM
-}
-
-@(private)
 allocate_shape_vertex_buffer :: proc(state: ^VulkanState, capacity: vk.DeviceSize) -> linux.Errno {
 	s := &state.shape_renderer
 
@@ -495,7 +472,12 @@ allocate_shape_vertex_buffer :: proc(state: ^VulkanState, capacity: vk.DeviceSiz
 	mem_reqs: vk.MemoryRequirements
 	vk.GetBufferMemoryRequirements(state.device, s.vk_buffer, &mem_reqs)
 
-	mem_type := find_host_visible_memory(mem_props, mem_reqs.memoryTypeBits) or_return
+	mem_type := find_memory_type(
+		mem_props,
+		mem_reqs.memoryTypeBits,
+		{.HOST_VISIBLE, .HOST_COHERENT},
+		vk.MemoryPropertyFlags{.HOST_VISIBLE},
+	) or_return
 
 	alloc_info := vk.MemoryAllocateInfo {
 		sType           = .MEMORY_ALLOCATE_INFO,
@@ -549,30 +531,8 @@ grow_shape_vertex_buffer :: proc(state: ^VulkanState, needed: vk.DeviceSize) -> 
 initialize_shape_pipeline :: proc(state: ^VulkanState) -> linux.Errno {
 	s := &state.shape_renderer
 
-	vert_spv := #load("shaders/shapes.vert.spv")
-	frag_spv := #load("shaders/shapes.frag.spv")
-
-	vert_info := vk.ShaderModuleCreateInfo {
-		sType    = .SHADER_MODULE_CREATE_INFO,
-		codeSize = len(vert_spv),
-		pCode    = cast([^]u32)raw_data(vert_spv),
-	}
-	if res := vk.CreateShaderModule(state.device, &vert_info, nil, &s.vert_shader);
-	   res != .SUCCESS {
-		fmt.eprintln("shapes: vkCreateShaderModule (vert) failed:", res)
-		return .EINVAL
-	}
-
-	frag_info := vk.ShaderModuleCreateInfo {
-		sType    = .SHADER_MODULE_CREATE_INFO,
-		codeSize = len(frag_spv),
-		pCode    = cast([^]u32)raw_data(frag_spv),
-	}
-	if res := vk.CreateShaderModule(state.device, &frag_info, nil, &s.frag_shader);
-	   res != .SUCCESS {
-		fmt.eprintln("shapes: vkCreateShaderModule (frag) failed:", res)
-		return .EINVAL
-	}
+	s.vert_shader = create_shader_module(state.device, #load("shaders/shapes.vert.spv")) or_return
+	s.frag_shader = create_shader_module(state.device, #load("shaders/shapes.frag.spv")) or_return
 
 	// Push constant: surface_width + surface_height (vertex stage only)
 	push_range := vk.PushConstantRange {
