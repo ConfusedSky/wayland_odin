@@ -5,7 +5,7 @@ import "core:fmt"
 import "core:sys/linux"
 import vk "vendor:vulkan"
 
-VulkanBuffer :: struct {
+VulkanFrameBuffer :: struct {
 	// LINEAR image: DMA-buf exported to the compositor (written to via vkCmdCopyImage)
 	image:             vk.Image,
 	memory:            vk.DeviceMemory,
@@ -24,10 +24,10 @@ allocate_vulkan_buffer :: proc(
 	w: u32,
 	h: u32,
 ) -> (
-	result: VulkanBuffer,
+	result: VulkanFrameBuffer,
 	err: linux.Errno,
 ) {
-	buf: VulkanBuffer
+	buf: VulkanFrameBuffer
 
 	mem_props: vk.PhysicalDeviceMemoryProperties
 	vk.GetPhysicalDeviceMemoryProperties(vk_state.physical_device, &mem_props)
@@ -202,7 +202,7 @@ allocate_vulkan_buffer :: proc(
 	)
 	return buf, nil
 }
-free_vulkan_buffer :: proc(vk_state: ^VulkanState, buf: ^VulkanBuffer) {
+free_vulkan_buffer :: proc(vk_state: ^VulkanState, buf: ^VulkanFrameBuffer) {
 	if buf.framebuffer != 0 {
 		vk.DestroyFramebuffer(vk_state.device, buf.framebuffer, nil)
 		buf.framebuffer = 0

@@ -50,7 +50,7 @@ state_t :: struct {
 	max_h:            u32,
 	buf_w:            u32,
 	buf_h:            u32,
-	vk_buf:           renderer.VulkanBuffer,
+	vk_buf:           renderer.VulkanFrameBuffer,
 	state:            state_state_t,
 	event_handlers:   [dynamic]RegisteredEventHandler,
 	last_err:         Errno,

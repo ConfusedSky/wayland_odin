@@ -4,14 +4,13 @@ import "core:fmt"
 import "core:sys/linux"
 import vk "vendor:vulkan"
 
-PipelineInfo :: struct {
-	push_constants: []vk.PushConstantRange,
-	fragment_spv:   []u8,
-	vertex_spv:     []u8,
-	vertex_input:   vk.PipelineVertexInputStateCreateInfo,
+VulkanPipelineInfo :: struct {
+	fragment_spv: []u8,
+	vertex_spv:   []u8,
+	vertex_input: vk.PipelineVertexInputStateCreateInfo,
 }
 
-Pipeline :: struct {
+VulkanPipeline :: struct($PushConstantCount: u32) {
 	fragment_shader: vk.ShaderModule,
 	vertex_shader:   vk.ShaderModule,
 	layout:          vk.PipelineLayout,
@@ -20,8 +19,8 @@ Pipeline :: struct {
 
 initialize_rendering_pipeline :: proc(
 	state: ^VulkanState,
-	pipeline: ^Pipeline,
-	info: ^PipelineInfo,
+	pipeline: ^VulkanPipeline($N),
+	info: ^VulkanPipelineInfo,
 ) -> (
 	err: linux.Errno,
 ) {
@@ -29,13 +28,21 @@ initialize_rendering_pipeline :: proc(
 	pipeline.vertex_shader = create_shader_module(state.device, info.vertex_spv) or_return
 	pipeline.fragment_shader = create_shader_module(state.device, info.fragment_spv) or_return
 
+	push_constant_range: vk.PushConstantRange
 	layout_info := vk.PipelineLayoutCreateInfo {
 		sType = .PIPELINE_LAYOUT_CREATE_INFO,
 	}
-	if len(info.push_constants) > 0 {
-		layout_info.pushConstantRangeCount = u32(len(info.push_constants))
-		layout_info.pPushConstantRanges = &info.push_constants[0]
+	if N > 0 {
+		push_constant_range = {
+			stageFlags = {.VERTEX, .FRAGMENT},
+			offset     = 0,
+			size       = N * size_of(f32),
+		}
+
+		layout_info.pushConstantRangeCount = N
+		layout_info.pPushConstantRanges = &push_constant_range
 	}
+
 	if res := vk.CreatePipelineLayout(state.device, &layout_info, nil, &pipeline.layout);
 	   res != .SUCCESS {
 		fmt.eprintln("vulkan: vkCreatePipelineLayout failed:", res)
@@ -138,7 +145,26 @@ initialize_rendering_pipeline :: proc(
 	return nil
 }
 
-destroy_pipeline :: proc(state: ^VulkanState, pipeline: ^Pipeline) {
+bind_pipeline :: proc(
+	command_buffer: vk.CommandBuffer,
+	pipeline: ^VulkanPipeline($N),
+	width: u32,
+	height: u32,
+	push_data: ^[N]f32,
+) {
+	vk.CmdBindPipeline(command_buffer, .GRAPHICS, pipeline.vk_pipeline)
+
+	vk.CmdPushConstants(
+		command_buffer,
+		pipeline.layout,
+		{.VERTEX, .FRAGMENT},
+		0,
+		u32(size_of(push_data^)),
+		push_data,
+	)
+}
+
+destroy_pipeline :: proc(state: ^VulkanState, pipeline: ^VulkanPipeline($N)) {
 	if pipeline.vk_pipeline != 0 {
 		vk.DestroyPipeline(state.device, pipeline.vk_pipeline, nil)
 		pipeline.vk_pipeline = 0

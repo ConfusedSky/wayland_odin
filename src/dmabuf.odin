@@ -11,7 +11,7 @@ zwp_linux_dmabuf_handlers: zwp_linux_dmabuf_v1.EventHandlers
 // The params object is single-shot per the protocol and is always destroyed after use.
 import_as_wl_buffer :: proc(
 	state: ^state_t,
-	buf: ^renderer.VulkanBuffer,
+	buf: ^renderer.VulkanFrameBuffer,
 	w: u32,
 	h: u32,
 ) -> (

@@ -100,7 +100,7 @@ ShapeVertex :: struct #packed {
 ShapeRenderer :: struct {
 	shape_data:      [dynamic]ShapeData, // one entry per submitted shape, sorted before upload
 	vertices:        [dynamic]ShapeVertex, // per-frame scratch: sorted shapes expanded to 4 verts each
-	pipeline:        Pipeline,
+	pipeline:        VulkanPipeline(2),
 	index_buffer:    vk.Buffer,
 	index_memory:    vk.DeviceMemory,
 	vk_buffer:       vk.Buffer,
@@ -269,10 +269,8 @@ end_shapes :: proc(
 	}
 	vk.FlushMappedMemoryRanges(state.device, 1, &flush)
 
-	vk.CmdBindPipeline(cmd, .GRAPHICS, shapes.pipeline.vk_pipeline)
-
 	push := [2]f32{f32(surf_w), f32(surf_h)}
-	vk.CmdPushConstants(cmd, shapes.pipeline.layout, {.VERTEX}, 0, size_of(push), &push)
+	bind_pipeline(cmd, &shapes.pipeline, surf_w, surf_h, &push)
 
 	offset: vk.DeviceSize = 0
 	vk.CmdBindVertexBuffers(cmd, 0, 1, &shapes.vk_buffer, &offset)
@@ -546,11 +544,10 @@ initialize_shape_pipeline :: proc(state: ^VulkanState) -> linux.Errno {
 		pVertexAttributeDescriptions    = &attrs[0],
 	}
 
-	info := PipelineInfo {
-		vertex_spv     = #load("shaders/shapes.vert.spv"),
-		fragment_spv   = #load("shaders/shapes.frag.spv"),
-		vertex_input   = vertex_input,
-		push_constants = {push_constant_range},
+	info := VulkanPipelineInfo {
+		vertex_spv   = #load("shaders/shapes.vert.spv"),
+		fragment_spv = #load("shaders/shapes.frag.spv"),
+		vertex_input = vertex_input,
 	}
 	initialize_rendering_pipeline(state, &s.pipeline, &info)
 

@@ -20,7 +20,7 @@ VulkanState :: struct {
 	graphics_queue:  vk.Queue,
 	graphics_family: u32,
 	render_pass:     vk.RenderPass,
-	grid_pipeline:   Pipeline,
+	grid_pipeline:   VulkanPipeline(5),
 	command_pool:    vk.CommandPool,
 	command_buffer:  vk.CommandBuffer,
 	render_fence:    vk.Fence,
@@ -272,11 +272,10 @@ initialize_grid_pipeline :: proc(state: ^VulkanState) -> linux.Errno {
 		sType = .PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO,
 	}
 
-	info := PipelineInfo {
-		push_constants = {push_constant_range},
-		vertex_input   = vertex_input_info,
-		vertex_spv     = #load("shaders/grid.vert.spv"),
-		fragment_spv   = #load("shaders/grid.frag.spv"),
+	info := VulkanPipelineInfo {
+		vertex_input = vertex_input_info,
+		vertex_spv   = #load("shaders/grid.vert.spv"),
+		fragment_spv = #load("shaders/grid.frag.spv"),
 	}
 	initialize_rendering_pipeline(state, &state.grid_pipeline, &info)
 
@@ -326,7 +325,7 @@ NUM_CELLS :: 10
 
 render_frame :: proc(
 	vk_state: ^VulkanState,
-	buf: ^VulkanBuffer,
+	buf: ^VulkanFrameBuffer,
 	params: RenderParams,
 ) -> linux.Errno {
 	if res := vk.WaitForFences(vk_state.device, 1, &vk_state.render_fence, true, max(u64));
@@ -366,8 +365,6 @@ render_frame :: proc(
 	}
 	vk.CmdBeginRenderPass(vk_state.command_buffer, &render_pass_begin, .INLINE)
 
-	vk.CmdBindPipeline(vk_state.command_buffer, .GRAPHICS, vk_state.grid_pipeline.vk_pipeline)
-
 	viewport := vk.Viewport {
 		x        = 0,
 		y        = 0,
@@ -390,12 +387,11 @@ render_frame :: proc(
 		params.pointer_y,
 		f32(NUM_CELLS),
 	}
-	vk.CmdPushConstants(
+	bind_pipeline(
 		vk_state.command_buffer,
-		vk_state.grid_pipeline.layout,
-		{.FRAGMENT},
-		0,
-		u32(size_of(push_data)),
+		&vk_state.grid_pipeline,
+		params.width,
+		params.height,
 		&push_data,
 	)
 
