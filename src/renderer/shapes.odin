@@ -517,31 +517,21 @@ initialize_shape_pipeline :: proc(state: ^VulkanState) -> linux.Errno {
 		size       = 2 * size_of(f32),
 	}
 
-	// Vertex attribute descriptions — 10 attributes across 16 f32s (64 bytes)
 	binding := vk.VertexInputBindingDescription {
 		binding   = 0,
 		stride    = size_of(ShapeVertex),
 		inputRate = .VERTEX,
 	}
 
-	attrs := [?]vk.VertexInputAttributeDescription {
-		{location = 0, binding = 0, format = .R32G32_SFLOAT, offset = 0}, // pos
-		{location = 1, binding = 0, format = .R32_SFLOAT, offset = 8}, // shape_type
-		{location = 2, binding = 0, format = .R32G32_SFLOAT, offset = 12}, // p0
-		{location = 3, binding = 0, format = .R32G32_SFLOAT, offset = 20}, // p1
-		{location = 4, binding = 0, format = .R32G32_SFLOAT, offset = 28}, // p2
-		{location = 5, binding = 0, format = .R32G32B32A32_SFLOAT, offset = 36}, // fill_color
-		{location = 6, binding = 0, format = .R32G32B32A32_SFLOAT, offset = 52}, // border_color
-		{location = 7, binding = 0, format = .R32_SFLOAT, offset = 68}, // border_width
-		{location = 8, binding = 0, format = .R32_SFLOAT, offset = 72}, // angle
-	}
+	attrs := get_vertex_attribute_descriptions(ShapeVertex, 0)
+	defer delete(attrs)
 
 	vertex_input := vk.PipelineVertexInputStateCreateInfo {
 		sType                           = .PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO,
 		vertexBindingDescriptionCount   = 1,
 		pVertexBindingDescriptions      = &binding,
 		vertexAttributeDescriptionCount = u32(len(attrs)),
-		pVertexAttributeDescriptions    = &attrs[0],
+		pVertexAttributeDescriptions    = raw_data(attrs),
 	}
 
 	info := VulkanPipelineInfo {

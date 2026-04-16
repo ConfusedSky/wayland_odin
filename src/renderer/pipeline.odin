@@ -1,5 +1,6 @@
 package renderer
 
+import "base:runtime"
 import "core:fmt"
 import "core:sys/linux"
 import vk "vendor:vulkan"
@@ -162,6 +163,56 @@ bind_pipeline :: proc(
 		u32(size_of(push_data^)),
 		push_data,
 	)
+}
+
+get_vertex_attribute_descriptions :: proc(
+	id: typeid,
+	binding: u32 = 0,
+	allocator := context.allocator,
+) -> []vk.VertexInputAttributeDescription {
+	ti := runtime.type_info_base(type_info_of(id))
+	info, ok := ti.variant.(runtime.Type_Info_Struct)
+	if !ok {
+		fmt.panicf("vertex attr: %v is not a struct", id)
+	}
+	if .packed not_in info.flags {
+		fmt.panicf("vertex attr: %v must be #packed", id)
+	}
+
+	count := int(info.field_count)
+	attrs := make([]vk.VertexInputAttributeDescription, count, allocator)
+	for i in 0 ..< count {
+		field_ti := runtime.type_info_base(info.types[i])
+		attrs[i] = {
+			location = u32(i),
+			binding  = binding,
+			format   = f32_format_for(field_ti, info.names[i]),
+			offset   = u32(info.offsets[i]),
+		}
+	}
+	return attrs
+}
+
+@(private)
+f32_format_for :: proc(ti: ^runtime.Type_Info, name: string) -> vk.Format {
+	if ti.id == f32 {
+		return .R32_SFLOAT
+	}
+	if arr, ok := ti.variant.(runtime.Type_Info_Array); ok {
+		if runtime.type_info_base(arr.elem).id == f32 {
+			switch arr.count {
+			case 1:
+				return .R32_SFLOAT
+			case 2:
+				return .R32G32_SFLOAT
+			case 3:
+				return .R32G32B32_SFLOAT
+			case 4:
+				return .R32G32B32A32_SFLOAT
+			}
+		}
+	}
+	fmt.panicf("vertex attr: unsupported type for field %q: %v", name, ti)
 }
 
 destroy_pipeline :: proc(state: ^VulkanState, pipeline: ^VulkanPipeline($N)) {
