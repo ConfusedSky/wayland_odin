@@ -42,7 +42,7 @@ VulkanState :: struct {
 	command_pool:    vk.CommandPool,
 	command_buffer:  vk.CommandBuffer,
 	render_fence:    vk.Fence,
-	shapes:          ShapeRenderer,
+	shape_renderer:  ShapeRenderer,
 }
 
 RenderParams :: struct {
@@ -730,7 +730,7 @@ render_frame :: proc(
 	vk.CmdDraw(vk_state.command_buffer, 3, 1, 0, 0)
 
 	// Draw shapes over the grid if any were submitted this frame
-	if len(vk_state.shapes.shapes) > 0 {
+	if len(vk_state.shape_renderer.shape_data) > 0 {
 		end_shapes(vk_state, vk_state.command_buffer, params.width, params.height) or_return
 	}
 

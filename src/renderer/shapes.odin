@@ -59,7 +59,7 @@ CircleData :: struct {
 	radius: f32,
 }
 
-Shape :: struct {
+ShapeData :: struct {
 	data:      union {
 		LineData,
 		RectData,
@@ -98,7 +98,7 @@ ShapeVertex :: struct #packed {
 }
 
 ShapeRenderer :: struct {
-	shapes:          [dynamic]Shape, // one entry per submitted shape, sorted before upload
+	shape_data:      [dynamic]ShapeData, // one entry per submitted shape, sorted before upload
 	vertices:        [dynamic]ShapeVertex, // per-frame scratch: sorted shapes expanded to 4 verts each
 	pipeline:        vk.Pipeline,
 	pipeline_layout: vk.PipelineLayout,
@@ -117,8 +117,8 @@ ShapeRenderer :: struct {
 // ---------------------------------------------------------------------------
 
 initialize_shape_renderer :: proc(state: ^VulkanState) -> linux.Errno {
-	s := &state.shapes
-	s.shapes = make([dynamic]Shape)
+	s := &state.shape_renderer
+	s.shape_data = make([dynamic]ShapeData)
 	s.vertices = make([dynamic]ShapeVertex)
 
 	// Static index buffer: pattern 0,1,2,2,1,3, 4,5,6,6,5,7, ...
@@ -194,7 +194,7 @@ initialize_shape_renderer :: proc(state: ^VulkanState) -> linux.Errno {
 }
 
 destroy_shape_renderer :: proc(state: ^VulkanState) {
-	s := &state.shapes
+	s := &state.shape_renderer
 	if s.vk_buffer != 0 {
 		if s.mapped_ptr != nil {
 			vk.UnmapMemory(state.device, s.vk_memory)
@@ -227,7 +227,7 @@ destroy_shape_renderer :: proc(state: ^VulkanState) {
 		vk.DestroyShaderModule(state.device, s.vert_shader, nil)
 		s.vert_shader = 0
 	}
-	delete(s.shapes)
+	delete(s.shape_data)
 	delete(s.vertices)
 }
 
@@ -236,11 +236,11 @@ destroy_shape_renderer :: proc(state: ^VulkanState) {
 // ---------------------------------------------------------------------------
 
 start_shapes :: proc(state: ^VulkanState) {
-	clear(&state.shapes.shapes)
+	clear(&state.shape_renderer.shape_data)
 }
 
-draw_shape :: proc(state: ^VulkanState, shape: Shape) {
-	append(&state.shapes.shapes, shape)
+draw_shape :: proc(state: ^VulkanState, shape: ShapeData) {
+	append(&state.shape_renderer.shape_data, shape)
 }
 
 // Called from render_frame after the grid draw, inside the render pass.
@@ -250,46 +250,46 @@ end_shapes :: proc(
 	surf_w: u32,
 	surf_h: u32,
 ) -> linux.Errno {
-	s := &state.shapes
-	n_shapes := len(s.shapes)
+	shapes := &state.shape_renderer
+	n_shapes := len(shapes.shape_data)
 	if n_shapes == 0 do return nil
 
 	// Sort back-to-front by zindex; stable so equal-zindex shapes keep submission order
-	slice.stable_sort_by(s.shapes[:], proc(a, b: Shape) -> bool {
+	slice.stable_sort_by(shapes.shape_data[:], proc(a, b: ShapeData) -> bool {
 		return a.transform.zindex < b.transform.zindex
 	})
 
 	// Expand sorted shapes into the vertex scratch buffer
-	clear(&s.vertices)
-	for sh in s.shapes {
-		expand_shape(sh, &s.vertices)
+	clear(&shapes.vertices)
+	for sh in shapes.shape_data {
+		expand_shape(sh, &shapes.vertices)
 	}
 
-	n_verts := len(s.vertices)
+	n_verts := len(shapes.vertices)
 	needed := vk.DeviceSize(n_verts * size_of(ShapeVertex))
-	if needed > s.buffer_capacity {
+	if needed > shapes.buffer_capacity {
 		grow_shape_vertex_buffer(state, needed) or_return
 	}
 
-	mem.copy(s.mapped_ptr, raw_data(s.vertices), int(needed))
+	mem.copy(shapes.mapped_ptr, raw_data(shapes.vertices), int(needed))
 
 	// Flush if not HOST_COHERENT — harmless if it is
 	flush := vk.MappedMemoryRange {
 		sType  = .MAPPED_MEMORY_RANGE,
-		memory = s.vk_memory,
+		memory = shapes.vk_memory,
 		offset = 0,
 		size   = vk.DeviceSize(vk.WHOLE_SIZE),
 	}
 	vk.FlushMappedMemoryRanges(state.device, 1, &flush)
 
-	vk.CmdBindPipeline(cmd, .GRAPHICS, s.pipeline)
+	vk.CmdBindPipeline(cmd, .GRAPHICS, shapes.pipeline)
 
 	push := [2]f32{f32(surf_w), f32(surf_h)}
-	vk.CmdPushConstants(cmd, s.pipeline_layout, {.VERTEX}, 0, size_of(push), &push)
+	vk.CmdPushConstants(cmd, shapes.pipeline_layout, {.VERTEX}, 0, size_of(push), &push)
 
 	offset: vk.DeviceSize = 0
-	vk.CmdBindVertexBuffers(cmd, 0, 1, &s.vk_buffer, &offset)
-	vk.CmdBindIndexBuffer(cmd, s.index_buffer, 0, .UINT16)
+	vk.CmdBindVertexBuffers(cmd, 0, 1, &shapes.vk_buffer, &offset)
+	vk.CmdBindIndexBuffer(cmd, shapes.index_buffer, 0, .UINT16)
 
 	total_shapes := n_verts / 4
 	batch_start := 0
@@ -308,7 +308,7 @@ end_shapes :: proc(
 // ---------------------------------------------------------------------------
 
 @(private)
-expand_shape :: proc(sh: Shape, vertices: ^[dynamic]ShapeVertex) {
+expand_shape :: proc(sh: ShapeData, vertices: ^[dynamic]ShapeVertex) {
 	style := sh.style
 	angle := sh.transform.angle
 
@@ -476,7 +476,7 @@ find_host_visible_memory :: proc(
 
 @(private)
 allocate_shape_vertex_buffer :: proc(state: ^VulkanState, capacity: vk.DeviceSize) -> linux.Errno {
-	s := &state.shapes
+	s := &state.shape_renderer
 
 	buf_info := vk.BufferCreateInfo {
 		sType       = .BUFFER_CREATE_INFO,
@@ -528,7 +528,7 @@ allocate_shape_vertex_buffer :: proc(state: ^VulkanState, capacity: vk.DeviceSiz
 
 @(private)
 grow_shape_vertex_buffer :: proc(state: ^VulkanState, needed: vk.DeviceSize) -> linux.Errno {
-	s := &state.shapes
+	s := &state.shape_renderer
 	// Unmap and destroy old buffer
 	if s.mapped_ptr != nil {
 		vk.UnmapMemory(state.device, s.vk_memory)
@@ -547,7 +547,7 @@ grow_shape_vertex_buffer :: proc(state: ^VulkanState, needed: vk.DeviceSize) -> 
 
 @(private)
 initialize_shape_pipeline :: proc(state: ^VulkanState) -> linux.Errno {
-	s := &state.shapes
+	s := &state.shape_renderer
 
 	vert_spv := #load("shaders/shapes.vert.spv")
 	frag_spv := #load("shaders/shapes.frag.spv")
