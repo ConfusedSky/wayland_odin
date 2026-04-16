@@ -340,9 +340,19 @@ expand_shape :: proc(sh: Shape, vertices: ^[dynamic]ShapeVertex) {
 		gp1 = data.p1
 		gp2 = {half_width, f32(int(data.cap))}
 
-	case RectData:
-		half_size := data.size / 2
-		center := data.pos + half_size
+	case RectData, RoundedRectData:
+		half_size, center: [2]f32
+		#partial switch d in data {
+		case RectData:
+			half_size = d.size / 2
+			center = d.pos + half_size
+			shape_type_f32 = f32(int(ShapeType.Rect))
+		case RoundedRectData:
+			half_size = d.size / 2
+			center = d.pos + half_size
+			shape_type_f32 = f32(int(ShapeType.RoundedRect))
+			gp2 = {d.corner_radius, 0}
+		}
 		pad := f32(1)
 		if angle != 0 {
 			r := linalg.length(half_size) + style.border_width + pad
@@ -357,31 +367,8 @@ expand_shape :: proc(sh: Shape, vertices: ^[dynamic]ShapeVertex) {
 			max_x = center.x + half_size.x + pad
 			max_y = center.y + half_size.y + pad
 		}
-		shape_type_f32 = f32(int(ShapeType.Rect))
 		gp0 = center
 		gp1 = half_size
-
-	case RoundedRectData:
-		half_size := data.size / 2
-		center := data.pos + half_size
-		pad := f32(1)
-		if angle != 0 {
-			r := linalg.length(half_size) + style.border_width + pad
-			min_x = center.x - r
-			min_y = center.y - r
-			max_x = center.x + r
-			max_y = center.y + r
-			vert_angle = angle
-		} else {
-			min_x = center.x - half_size.x - pad
-			min_y = center.y - half_size.y - pad
-			max_x = center.x + half_size.x + pad
-			max_y = center.y + half_size.y + pad
-		}
-		shape_type_f32 = f32(int(ShapeType.RoundedRect))
-		gp0 = center
-		gp1 = half_size
-		gp2 = {data.corner_radius, 0}
 
 	case TriangleData:
 		pad := f32(1)
