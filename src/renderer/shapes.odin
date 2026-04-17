@@ -2,15 +2,9 @@ package renderer
 
 import "core:fmt"
 import "core:math/linalg"
-import "core:mem"
 import "core:slice"
 import "core:sys/linux"
 import vk "vendor:vulkan"
-
-SHAPES_PER_BATCH :: 682
-INDEX_BUFFER_LEN :: 4096
-// Initial vertex buffer capacity in bytes — enough for 64 shapes
-INITIAL_SHAPE_BUFFER_CAPACITY :: 64 * 4 * size_of(ShapeVertex)
 
 LineCap :: enum int {
 	Square = 0,
@@ -98,15 +92,9 @@ ShapeVertex :: struct #packed {
 }
 
 ShapeRenderer :: struct {
-	shape_data:      [dynamic]ShapeData, // one entry per submitted shape, sorted before upload
-	vertices:        [dynamic]ShapeVertex, // per-frame scratch: sorted shapes expanded to 4 verts each
-	pipeline:        VulkanPipeline(2),
-	index_buffer:    vk.Buffer,
-	index_memory:    vk.DeviceMemory,
-	vk_buffer:       vk.Buffer,
-	vk_memory:       vk.DeviceMemory,
-	buffer_capacity: vk.DeviceSize,
-	mapped_ptr:      rawptr, // persistently mapped; valid while vk_buffer alive
+	shape_data: [dynamic]ShapeData, // one entry per submitted shape, sorted before upload
+	vertices:   [dynamic]ShapeVertex, // per-frame scratch: sorted shapes expanded to 4 verts each
+	pipeline:   VulkanPipeline(2, ShapeVertex),
 }
 
 // ---------------------------------------------------------------------------
@@ -118,76 +106,6 @@ initialize_shape_renderer :: proc(state: ^VulkanState) -> linux.Errno {
 	s.shape_data = make([dynamic]ShapeData)
 	s.vertices = make([dynamic]ShapeVertex)
 
-	// Static index buffer: pattern 0,1,2,2,1,3, 4,5,6,6,5,7, ...
-	// 682 complete quads × 6 = 4092 entries used; 4 trailing zeros for alignment.
-	indices: [INDEX_BUFFER_LEN]u16
-	for q in 0 ..< SHAPES_PER_BATCH {
-		base := q * 4
-		i := q * 6
-		indices[i + 0] = u16(base + 0)
-		indices[i + 1] = u16(base + 1)
-		indices[i + 2] = u16(base + 2)
-		indices[i + 3] = u16(base + 2)
-		indices[i + 4] = u16(base + 1)
-		indices[i + 5] = u16(base + 3)
-	}
-
-	index_size := vk.DeviceSize(size_of(indices))
-
-	// Host-visible index buffer (small, written once)
-	idx_buf_info := vk.BufferCreateInfo {
-		sType       = .BUFFER_CREATE_INFO,
-		size        = index_size,
-		usage       = {.INDEX_BUFFER},
-		sharingMode = .EXCLUSIVE,
-	}
-	if res := vk.CreateBuffer(state.device, &idx_buf_info, nil, &s.index_buffer); res != .SUCCESS {
-		fmt.eprintln("shapes: vkCreateBuffer (index) failed:", res)
-		return .EINVAL
-	}
-
-	mem_props: vk.PhysicalDeviceMemoryProperties
-	vk.GetPhysicalDeviceMemoryProperties(state.physical_device, &mem_props)
-
-	idx_mem_reqs: vk.MemoryRequirements
-	vk.GetBufferMemoryRequirements(state.device, s.index_buffer, &idx_mem_reqs)
-
-	idx_mem_type := find_memory_type(
-		mem_props,
-		idx_mem_reqs.memoryTypeBits,
-		{.HOST_VISIBLE, .HOST_COHERENT},
-		vk.MemoryPropertyFlags{.HOST_VISIBLE},
-	) or_return
-
-	idx_alloc := vk.MemoryAllocateInfo {
-		sType           = .MEMORY_ALLOCATE_INFO,
-		allocationSize  = idx_mem_reqs.size,
-		memoryTypeIndex = idx_mem_type,
-	}
-	if res := vk.AllocateMemory(state.device, &idx_alloc, nil, &s.index_memory); res != .SUCCESS {
-		fmt.eprintln("shapes: vkAllocateMemory (index) failed:", res)
-		return .ENOMEM
-	}
-	vk.BindBufferMemory(state.device, s.index_buffer, s.index_memory, 0)
-
-	// Upload index data once
-	idx_mapped: rawptr
-	vk.MapMemory(state.device, s.index_memory, 0, index_size, {}, &idx_mapped)
-	mem.copy(idx_mapped, &indices[0], int(index_size))
-
-	// Flush if not HOST_COHERENT (must happen before unmap)
-	flush_idx := vk.MappedMemoryRange {
-		sType  = .MAPPED_MEMORY_RANGE,
-		memory = s.index_memory,
-		offset = 0,
-		size   = vk.DeviceSize(vk.WHOLE_SIZE),
-	}
-	vk.FlushMappedMemoryRanges(state.device, 1, &flush_idx)
-	vk.UnmapMemory(state.device, s.index_memory)
-
-	// Initial dynamic vertex buffer (persistently mapped)
-	allocate_shape_vertex_buffer(state, INITIAL_SHAPE_BUFFER_CAPACITY) or_return
-
 	// Shape pipeline
 	initialize_shape_pipeline(state) or_return
 
@@ -197,22 +115,6 @@ initialize_shape_renderer :: proc(state: ^VulkanState) -> linux.Errno {
 
 destroy_shape_renderer :: proc(state: ^VulkanState) {
 	s := &state.shape_renderer
-	if s.vk_buffer != 0 {
-		if s.mapped_ptr != nil {
-			vk.UnmapMemory(state.device, s.vk_memory)
-			s.mapped_ptr = nil
-		}
-		vk.DestroyBuffer(state.device, s.vk_buffer, nil)
-		vk.FreeMemory(state.device, s.vk_memory, nil)
-		s.vk_buffer = 0
-		s.vk_memory = 0
-	}
-	if s.index_buffer != 0 {
-		vk.DestroyBuffer(state.device, s.index_buffer, nil)
-		vk.FreeMemory(state.device, s.index_memory, nil)
-		s.index_buffer = 0
-		s.index_memory = 0
-	}
 	destroy_pipeline(state, &s.pipeline)
 	delete(s.shape_data)
 	delete(s.vertices)
@@ -240,6 +142,7 @@ end_shapes :: proc(
 	shapes := &state.shape_renderer
 	n_shapes := len(shapes.shape_data)
 	if n_shapes == 0 do return nil
+	assert(n_shapes <= 16383, "too many shapes: u16 index buffer overflow")
 
 	// Sort back-to-front by zindex; stable so equal-zindex shapes keep submission order
 	slice.stable_sort_by(shapes.shape_data[:], proc(a, b: ShapeData) -> bool {
@@ -252,38 +155,10 @@ end_shapes :: proc(
 		expand_shape(sh, &shapes.vertices)
 	}
 
-	n_verts := len(shapes.vertices)
-	needed := vk.DeviceSize(n_verts * size_of(ShapeVertex))
-	if needed > shapes.buffer_capacity {
-		grow_shape_vertex_buffer(state, needed) or_return
-	}
-
-	mem.copy(shapes.mapped_ptr, raw_data(shapes.vertices), int(needed))
-
-	// Flush if not HOST_COHERENT — harmless if it is
-	flush := vk.MappedMemoryRange {
-		sType  = .MAPPED_MEMORY_RANGE,
-		memory = shapes.vk_memory,
-		offset = 0,
-		size   = vk.DeviceSize(vk.WHOLE_SIZE),
-	}
-	vk.FlushMappedMemoryRanges(state.device, 1, &flush)
+	update_pipeline_verticies(state, &shapes.pipeline, shapes.vertices[:])
 
 	push := [2]f32{f32(surf_w), f32(surf_h)}
-	bind_pipeline(cmd, &shapes.pipeline, surf_w, surf_h, &push)
-
-	offset: vk.DeviceSize = 0
-	vk.CmdBindVertexBuffers(cmd, 0, 1, &shapes.vk_buffer, &offset)
-	vk.CmdBindIndexBuffer(cmd, shapes.index_buffer, 0, .UINT16)
-
-	total_shapes := n_verts / 4
-	batch_start := 0
-	for batch_start < total_shapes {
-		count := min(total_shapes - batch_start, SHAPES_PER_BATCH)
-		vertex_offset := i32(batch_start * 4)
-		vk.CmdDrawIndexed(cmd, u32(count * 6), 1, 0, vertex_offset, 0)
-		batch_start += count
-	}
+	apply_pipeline(cmd, &shapes.pipeline, &push)
 
 	return nil
 }
@@ -432,114 +307,15 @@ expand_shape :: proc(sh: ShapeData, vertices: ^[dynamic]ShapeVertex) {
 }
 
 @(private)
-allocate_shape_vertex_buffer :: proc(state: ^VulkanState, capacity: vk.DeviceSize) -> linux.Errno {
-	s := &state.shape_renderer
-
-	buf_info := vk.BufferCreateInfo {
-		sType       = .BUFFER_CREATE_INFO,
-		size        = capacity,
-		usage       = {.VERTEX_BUFFER},
-		sharingMode = .EXCLUSIVE,
-	}
-	if res := vk.CreateBuffer(state.device, &buf_info, nil, &s.vk_buffer); res != .SUCCESS {
-		fmt.eprintln("shapes: vkCreateBuffer (vertex) failed:", res)
-		return .EINVAL
-	}
-
-	mem_props: vk.PhysicalDeviceMemoryProperties
-	vk.GetPhysicalDeviceMemoryProperties(state.physical_device, &mem_props)
-
-	mem_reqs: vk.MemoryRequirements
-	vk.GetBufferMemoryRequirements(state.device, s.vk_buffer, &mem_reqs)
-
-	mem_type := find_memory_type(
-		mem_props,
-		mem_reqs.memoryTypeBits,
-		{.HOST_VISIBLE, .HOST_COHERENT},
-		vk.MemoryPropertyFlags{.HOST_VISIBLE},
-	) or_return
-
-	alloc_info := vk.MemoryAllocateInfo {
-		sType           = .MEMORY_ALLOCATE_INFO,
-		allocationSize  = mem_reqs.size,
-		memoryTypeIndex = mem_type,
-	}
-	if res := vk.AllocateMemory(state.device, &alloc_info, nil, &s.vk_memory); res != .SUCCESS {
-		fmt.eprintln("shapes: vkAllocateMemory (vertex) failed:", res)
-		vk.DestroyBuffer(state.device, s.vk_buffer, nil)
-		s.vk_buffer = 0
-		return .ENOMEM
-	}
-	vk.BindBufferMemory(state.device, s.vk_buffer, s.vk_memory, 0)
-
-	if res := vk.MapMemory(
-		state.device,
-		s.vk_memory,
-		0,
-		vk.DeviceSize(vk.WHOLE_SIZE),
-		{},
-		&s.mapped_ptr,
-	); res != .SUCCESS {
-		fmt.eprintln("shapes: vkMapMemory failed:", res)
-		return .EINVAL
-	}
-
-	s.buffer_capacity = capacity
-	return nil
-}
-
-@(private)
-grow_shape_vertex_buffer :: proc(state: ^VulkanState, needed: vk.DeviceSize) -> linux.Errno {
-	s := &state.shape_renderer
-	// Unmap and destroy old buffer
-	if s.mapped_ptr != nil {
-		vk.UnmapMemory(state.device, s.vk_memory)
-		s.mapped_ptr = nil
-	}
-	if s.vk_buffer != 0 {
-		vk.DestroyBuffer(state.device, s.vk_buffer, nil)
-		vk.FreeMemory(state.device, s.vk_memory, nil)
-		s.vk_buffer = 0
-		s.vk_memory = 0
-	}
-	new_cap := max(needed * 2, vk.DeviceSize(INITIAL_SHAPE_BUFFER_CAPACITY))
-	fmt.printfln("shapes: growing vertex buffer to %v bytes", new_cap)
-	return allocate_shape_vertex_buffer(state, new_cap)
-}
-
-@(private)
 initialize_shape_pipeline :: proc(state: ^VulkanState) -> linux.Errno {
-	s := &state.shape_renderer
-
-	push_constant_range := vk.PushConstantRange {
-		stageFlags = {.VERTEX},
-		offset     = 0,
-		size       = 2 * size_of(f32),
-	}
-
-	binding := vk.VertexInputBindingDescription {
-		binding   = 0,
-		stride    = size_of(ShapeVertex),
-		inputRate = .VERTEX,
-	}
-
-	attrs := get_vertex_attribute_descriptions(ShapeVertex, 0)
-	defer delete(attrs)
-
-	vertex_input := vk.PipelineVertexInputStateCreateInfo {
-		sType                           = .PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO,
-		vertexBindingDescriptionCount   = 1,
-		pVertexBindingDescriptions      = &binding,
-		vertexAttributeDescriptionCount = u32(len(attrs)),
-		pVertexAttributeDescriptions    = raw_data(attrs),
-	}
+	shapes := &state.shape_renderer
 
 	info := VulkanPipelineInfo {
-		vertex_spv   = #load("shaders/shapes.vert.spv"),
-		fragment_spv = #load("shaders/shapes.frag.spv"),
-		vertex_input = vertex_input,
+		vertex_spv        = #load("shaders/shapes.vert.spv"),
+		fragment_spv      = #load("shaders/shapes.frag.spv"),
+		starting_capacity = 64,
 	}
-	initialize_rendering_pipeline(state, &s.pipeline, &info)
+	initialize_rendering_pipeline(state, &shapes.pipeline, &info) or_return
 
 	fmt.printfln("shapes: pipeline ready")
 	return nil

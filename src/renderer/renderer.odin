@@ -16,11 +16,12 @@ VulkanState :: struct {
 	instance:        vk.Instance,
 	debug_messenger: vk.DebugUtilsMessengerEXT,
 	physical_device: vk.PhysicalDevice,
+	mem_props:       vk.PhysicalDeviceMemoryProperties,
 	device:          vk.Device,
 	graphics_queue:  vk.Queue,
 	graphics_family: u32,
 	render_pass:     vk.RenderPass,
-	grid_pipeline:   VulkanPipeline(5),
+	grid_pipeline:   VulkanPipeline(5, NoVertex),
 	command_pool:    vk.CommandPool,
 	command_buffer:  vk.CommandBuffer,
 	render_fence:    vk.Fence,
@@ -165,6 +166,7 @@ initialize_vulkan :: proc(state: ^VulkanState) -> linux.Errno {
 		if chosen == nil do chosen = pd
 	}
 	state.physical_device = chosen
+	vk.GetPhysicalDeviceMemoryProperties(chosen, &state.mem_props)
 
 	{
 		props: vk.PhysicalDeviceProperties
@@ -261,23 +263,11 @@ initialize_vulkan :: proc(state: ^VulkanState) -> linux.Errno {
 }
 
 initialize_grid_pipeline :: proc(state: ^VulkanState) -> linux.Errno {
-	// Push constant: 5 × f32
-	push_constant_range := vk.PushConstantRange {
-		stageFlags = {.FRAGMENT},
-		offset     = 0,
-		size       = 5 * size_of(f32),
-	}
-
-	vertex_input_info := vk.PipelineVertexInputStateCreateInfo {
-		sType = .PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO,
-	}
-
 	info := VulkanPipelineInfo {
-		vertex_input = vertex_input_info,
 		vertex_spv   = #load("shaders/grid.vert.spv"),
 		fragment_spv = #load("shaders/grid.frag.spv"),
 	}
-	initialize_rendering_pipeline(state, &state.grid_pipeline, &info)
+	initialize_rendering_pipeline(state, &state.grid_pipeline, &info) or_return
 
 	fmt.printfln("vulkan: grid pipeline ready")
 	return nil
@@ -387,16 +377,7 @@ render_frame :: proc(
 		params.pointer_y,
 		f32(NUM_CELLS),
 	}
-	bind_pipeline(
-		vk_state.command_buffer,
-		&vk_state.grid_pipeline,
-		params.width,
-		params.height,
-		&push_data,
-	)
-
-	// Full-screen triangle — no vertex buffer
-	vk.CmdDraw(vk_state.command_buffer, 3, 1, 0, 0)
+	apply_pipeline(vk_state.command_buffer, &vk_state.grid_pipeline, &push_data)
 
 	// Draw shapes over the grid if any were submitted this frame
 	if len(vk_state.shape_renderer.shape_data) > 0 {
