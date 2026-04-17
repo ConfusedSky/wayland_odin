@@ -11,7 +11,7 @@ LineCap :: enum int {
 	Round  = 1,
 }
 
-Style :: struct {
+ShapeStyle :: struct {
 	fill_color:   [4]f32,
 	border_color: [4]f32,
 	border_width: f32,
@@ -63,7 +63,7 @@ ShapeData :: struct {
 		CircleData,
 	},
 	transform: Transform,
-	style:     Style,
+	style:     ShapeStyle,
 }
 
 @(private)

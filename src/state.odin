@@ -51,6 +51,7 @@ state_t :: struct {
 	buf_w:            u32,
 	buf_h:            u32,
 	vk_buf:           renderer.VulkanFrameBuffer,
+	font:             ^renderer.Font,
 	state:            state_state_t,
 	event_handlers:   [dynamic]RegisteredEventHandler,
 	last_err:         Errno,
@@ -125,6 +126,10 @@ find_event_handler :: proc(handlers: []RegisteredEventHandler, object_id: u32) -
 }
 
 cleanup :: proc(state: ^state_t) -> Errno {
+	if state.font != nil {
+		renderer.destroy_font(&state.vulkan, state.font)
+		state.font = nil
+	}
 	renderer.free_vulkan_buffer(&state.vulkan, &state.vk_buf)
 	renderer.cleanup_vulkan(&state.vulkan)
 	for len(state.event_handlers) > 0 {

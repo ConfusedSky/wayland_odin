@@ -26,6 +26,7 @@ VulkanState :: struct {
 	command_buffer:  vk.CommandBuffer,
 	render_fence:    vk.Fence,
 	shape_renderer:  ShapeRenderer,
+	text_renderer:   TextRenderer,
 }
 
 RenderParams :: struct {
@@ -384,6 +385,10 @@ render_frame :: proc(
 		end_shapes(vk_state, vk_state.command_buffer, params.width, params.height) or_return
 	}
 
+	if len(vk_state.text_renderer.text_draws) > 0 {
+		end_text(vk_state, vk_state.command_buffer, params.width, params.height) or_return
+	}
+
 	vk.CmdEndRenderPass(vk_state.command_buffer)
 
 	full_subresource_range := vk.ImageSubresourceRange {
@@ -499,6 +504,7 @@ cleanup_vulkan :: proc(state: ^VulkanState) {
 	if state.device != nil {
 		vk.DeviceWaitIdle(state.device)
 		destroy_shape_renderer(state)
+		destroy_text_renderer(state)
 		destroy_pipeline(state, &state.grid_pipeline)
 		if state.render_fence != 0 {
 			vk.DestroyFence(state.device, state.render_fence, nil)

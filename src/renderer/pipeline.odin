@@ -9,23 +9,25 @@ import vk "vendor:vulkan"
 NoVertex :: struct {}
 
 VulkanPipelineInfo :: struct {
-	fragment_spv:      []u8,
-	vertex_spv:        []u8,
-	starting_capacity: vk.DeviceSize,
+	fragment_spv:        []u8,
+	vertex_spv:          []u8,
+	starting_capacity:   vk.DeviceSize,
+	descriptor_bindings: []vk.DescriptorSetLayoutBinding, // nil = no descriptor set
 }
 
 VulkanPipeline :: struct($PushConstantCount: u32, $VertexType: typeid) {
-	fragment_shader: vk.ShaderModule,
-	vertex_shader:   vk.ShaderModule,
-	layout:          vk.PipelineLayout,
-	vk_pipeline:     vk.Pipeline,
-	n_quads:         u32,
-	index_buffer:    vk.Buffer,
-	index_memory:    vk.DeviceMemory,
-	vertex_buffer:   vk.Buffer,
-	vertex_memory:   vk.DeviceMemory,
-	vertex_capacity: vk.DeviceSize,
-	vertex_data:     rawptr,
+	fragment_shader:       vk.ShaderModule,
+	vertex_shader:         vk.ShaderModule,
+	descriptor_set_layout: vk.DescriptorSetLayout, // 0 if unused
+	layout:                vk.PipelineLayout,
+	vk_pipeline:           vk.Pipeline,
+	n_quads:               u32,
+	index_buffer:          vk.Buffer,
+	index_memory:          vk.DeviceMemory,
+	vertex_buffer:         vk.Buffer,
+	vertex_memory:         vk.DeviceMemory,
+	vertex_capacity:       vk.DeviceSize,
+	vertex_data:           rawptr,
 }
 
 initialize_rendering_pipeline :: proc(
@@ -39,9 +41,30 @@ initialize_rendering_pipeline :: proc(
 	pipeline.vertex_shader = create_shader_module(state.device, info.vertex_spv) or_return
 	pipeline.fragment_shader = create_shader_module(state.device, info.fragment_spv) or_return
 
+	if len(info.descriptor_bindings) > 0 {
+		dsl_info := vk.DescriptorSetLayoutCreateInfo {
+			sType        = .DESCRIPTOR_SET_LAYOUT_CREATE_INFO,
+			bindingCount = u32(len(info.descriptor_bindings)),
+			pBindings    = raw_data(info.descriptor_bindings),
+		}
+		if res := vk.CreateDescriptorSetLayout(
+			state.device,
+			&dsl_info,
+			nil,
+			&pipeline.descriptor_set_layout,
+		); res != .SUCCESS {
+			fmt.eprintln("vulkan: vkCreateDescriptorSetLayout failed:", res)
+			return .EINVAL
+		}
+	}
+
 	push_constant_range: vk.PushConstantRange
 	layout_info := vk.PipelineLayoutCreateInfo {
 		sType = .PIPELINE_LAYOUT_CREATE_INFO,
+	}
+	if pipeline.descriptor_set_layout != 0 {
+		layout_info.setLayoutCount = 1
+		layout_info.pSetLayouts = &pipeline.descriptor_set_layout
 	}
 	when PushConstantCount > 0 {
 		push_constant_range = {
@@ -50,7 +73,7 @@ initialize_rendering_pipeline :: proc(
 			size       = PushConstantCount * size_of(f32),
 		}
 
-		layout_info.pushConstantRangeCount = PushConstantCount
+		layout_info.pushConstantRangeCount = 1
 		layout_info.pPushConstantRanges = &push_constant_range
 	}
 
@@ -184,6 +207,7 @@ apply_pipeline :: proc(
 	command_buffer: vk.CommandBuffer,
 	pipeline: ^VulkanPipeline($C, $V),
 	push_data: ^[C]f32,
+	descriptor_set: ^vk.DescriptorSet = nil,
 ) {
 	vk.CmdBindPipeline(command_buffer, .GRAPHICS, pipeline.vk_pipeline)
 
@@ -195,6 +219,19 @@ apply_pipeline :: proc(
 		u32(size_of(push_data^)),
 		push_data,
 	)
+
+	if descriptor_set != nil {
+		vk.CmdBindDescriptorSets(
+			command_buffer,
+			.GRAPHICS,
+			pipeline.layout,
+			0,
+			1,
+			descriptor_set,
+			0,
+			nil,
+		)
+	}
 
 	when V == NoVertex {
 		// Full-screen triangle — no vertex buffer
@@ -442,6 +479,10 @@ destroy_pipeline :: proc(state: ^VulkanState, pipeline: ^VulkanPipeline($C, $V))
 	if pipeline.layout != 0 {
 		vk.DestroyPipelineLayout(state.device, pipeline.layout, nil)
 		pipeline.layout = 0
+	}
+	if pipeline.descriptor_set_layout != 0 {
+		vk.DestroyDescriptorSetLayout(state.device, pipeline.descriptor_set_layout, nil)
+		pipeline.descriptor_set_layout = 0
 	}
 	if pipeline.fragment_shader != 0 {
 		vk.DestroyShaderModule(state.device, pipeline.fragment_shader, nil)

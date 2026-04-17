@@ -4,5 +4,7 @@ glslc src/renderer/shaders/grid.vert  -o src/renderer/shaders/grid.vert.spv
 glslc src/renderer/shaders/grid.frag  -o src/renderer/shaders/grid.frag.spv
 glslc src/renderer/shaders/shapes.vert -o src/renderer/shaders/shapes.vert.spv
 glslc src/renderer/shaders/shapes.frag -o src/renderer/shaders/shapes.frag.spv
+glslc src/renderer/shaders/text.vert  -o src/renderer/shaders/text.vert.spv
+glslc src/renderer/shaders/text.frag  -o src/renderer/shaders/text.frag.spv
 
 odin build ./src -debug -o:none -out:odin

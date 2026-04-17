@@ -113,6 +113,11 @@ initialize_surface :: proc(state: ^state_t) -> Errno {
 	renderer.initialize_grid_pipeline(&state.vulkan) or_return
 	renderer.initialize_vulkan_commands(&state.vulkan) or_return
 	renderer.initialize_shape_renderer(&state.vulkan) or_return
+	renderer.initialize_text_renderer(&state.vulkan) or_return
+
+	font, font_err := renderer.load_font(&state.vulkan)
+	if font_err != nil do return font_err
+	state.font = font
 
 	vk_buf, err := renderer.allocate_vulkan_buffer(&state.vulkan, state.max_w, state.max_h)
 	if err != nil do return err
@@ -155,8 +160,9 @@ draw_next_frame :: proc(state: ^state_t) -> Errno {
 		return nil
 	}
 
-	// Submit shapes for this frame
+	// Submit shapes and text for this frame
 	renderer.start_shapes(&state.vulkan)
+	renderer.start_text(&state.vulkan)
 
 	renderer.draw_shape(
 		&state.vulkan,
@@ -270,6 +276,28 @@ draw_next_frame :: proc(state: ^state_t) -> Errno {
 		{
 			data = renderer.CircleData{center = {640, 430}, radius = 30},
 			style = {fill_color = {0, 0.6, 1, 0.7}, border_color = {1, 1, 1, 1}, border_width = 4},
+		},
+	)
+
+	renderer.draw_text_top_left(
+		&state.vulkan,
+		"Hello, World!",
+		{100, 200},
+		renderer.TextStyle{font = state.font, color = {1, 1, 1, 1}},
+	)
+
+	rect := renderer.get_text_bounding_box_top_left(
+		"Hello, World!",
+		{100, 200},
+		{font = state.font},
+	)
+	fmt.println(rect)
+
+	renderer.draw_shape(
+		&state.vulkan,
+		{
+			data = renderer.RectData{pos = rect.pos, size = rect.size},
+			style = {fill_color = {1, 0, 0, 0.7}},
 		},
 	)
 
