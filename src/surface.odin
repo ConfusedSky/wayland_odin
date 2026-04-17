@@ -279,24 +279,24 @@ draw_next_frame :: proc(state: ^state_t) -> Errno {
 		},
 	)
 
-	renderer.draw_text_top_left(
-		&state.vulkan,
-		"Hello, World!",
-		{100, 200},
-		renderer.TextStyle{font = state.font, color = {1, 1, 1, 1}},
-	)
-
 	rect := renderer.get_text_bounding_box_top_left(
 		"Hello, World!",
-		{100, 200},
+		{f32(state.w), 0},
 		{font = state.font},
 	)
 	fmt.println(rect)
 
+	renderer.draw_text_top_left(
+		&state.vulkan,
+		"Hello, World!",
+		{f32(state.w) - rect.size.x, 0},
+		renderer.TextStyle{font = state.font, color = {1, 1, 1, 1}},
+	)
+
 	renderer.draw_shape(
 		&state.vulkan,
 		{
-			data = renderer.RectData{pos = rect.pos, size = rect.size},
+			data = renderer.RectData{pos = rect.pos - {rect.size.x, 0}, size = rect.size},
 			style = {fill_color = {1, 0, 0, 0.7}},
 		},
 	)
