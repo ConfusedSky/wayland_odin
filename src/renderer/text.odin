@@ -1,6 +1,7 @@
 package renderer
 
 import "core:fmt"
+import "core:math"
 import "core:mem"
 import "core:os"
 import "core:sys/linux"
@@ -8,12 +9,10 @@ import stbtt "vendor:stb/truetype"
 import vk "vendor:vulkan"
 
 FONT_PATH :: "/usr/share/fonts/Adwaita/AdwaitaSans-Regular.ttf"
-FONT_PIXEL_SIZE :: f32(18)
+FONT_PIXEL_SIZE :: f32(24)
 FONT_OVERSAMPLE_H :: u32(4)
 FONT_OVERSAMPLE_V :: u32(4)
 
-ATLAS_WIDTH :: u32(512 * 2)
-ATLAS_HEIGHT :: u32(256 * 2)
 GLYPH_FIRST :: 32
 GLYPH_COUNT :: 96
 
@@ -26,13 +25,14 @@ GlyphInfo :: struct {
 }
 
 Font :: struct {
-	ascent, descent: f32,
-	glyphs:          [GLYPH_COUNT]GlyphInfo,
-	atlas_image:     vk.Image,
-	atlas_memory:    vk.DeviceMemory,
-	atlas_view:      vk.ImageView,
-	atlas_sampler:   vk.Sampler,
-	descriptor_set:  vk.DescriptorSet,
+	ascent, descent:  f32,
+	glyphs:           [GLYPH_COUNT]GlyphInfo,
+	atlas_w, atlas_h: u32,
+	atlas_image:      vk.Image,
+	atlas_memory:     vk.DeviceMemory,
+	atlas_view:       vk.ImageView,
+	atlas_sampler:    vk.Sampler,
+	descriptor_set:   vk.DescriptorSet,
 }
 
 TextStyle :: struct {
@@ -62,6 +62,34 @@ TextRenderer :: struct {
 	vertices:   [dynamic]TextVertex,
 	pool:       vk.DescriptorPool,
 	pipeline:   VulkanPipeline(2, TextVertex),
+}
+
+// ---------------------------------------------------------------------------
+// Atlas size calculation
+// ---------------------------------------------------------------------------
+
+@(private)
+next_pow2 :: proc(v: u32) -> u32 {
+	n := v - 1
+	n |= n >> 1
+	n |= n >> 2
+	n |= n >> 4
+	n |= n >> 8
+	n |= n >> 16
+	return n + 1
+}
+
+// Returns the smallest square power-of-2 atlas that can fit all glyphs.
+// Assumes ~75% packing efficiency from stb_truetype's bin packer.
+@(private)
+compute_atlas_size :: proc(pixel_size: f32, oversample_h, oversample_v: u32) -> (w, h: u32) {
+	glyph_w := u32(pixel_size * f32(oversample_h)) + 2
+	glyph_h := u32(pixel_size * f32(oversample_v)) + 2
+	total_area := u32(GLYPH_COUNT) * glyph_w * glyph_h
+	// 4/3 factor accounts for packing inefficiency
+	padded := total_area * 4 / 3
+	side := next_pow2(u32(math.sqrt(f32(padded))) + 1)
+	return side, side
 }
 
 // ---------------------------------------------------------------------------
@@ -134,13 +162,16 @@ load_font :: proc(state: ^VulkanState) -> (font: ^Font, err: linux.Errno) {
 	}
 	defer delete(font_data)
 
-	bitmap := make([]u8, ATLAS_WIDTH * ATLAS_HEIGHT)
+	atlas_w, atlas_h := compute_atlas_size(FONT_PIXEL_SIZE, FONT_OVERSAMPLE_H, FONT_OVERSAMPLE_V)
+	font.atlas_w = atlas_w
+	font.atlas_h = atlas_h
+
+	bitmap := make([]u8, atlas_w * atlas_h)
 	defer delete(bitmap)
 
 	chardata: [GLYPH_COUNT]stbtt.packedchar
 	spc: stbtt.pack_context
-	if stbtt.PackBegin(&spc, raw_data(bitmap), i32(ATLAS_WIDTH), i32(ATLAS_HEIGHT), 0, 1, nil) ==
-	   0 {
+	if stbtt.PackBegin(&spc, raw_data(bitmap), i32(atlas_w), i32(atlas_h), 0, 1, nil) == 0 {
 		fmt.eprintln("text: PackBegin failed")
 		err = .EINVAL
 		return
@@ -177,8 +208,8 @@ load_font :: proc(state: ^VulkanState) -> (font: ^Font, err: linux.Errno) {
 		q: stbtt.aligned_quad
 		stbtt.GetPackedQuad(
 			&chardata[0],
-			i32(ATLAS_WIDTH),
-			i32(ATLAS_HEIGHT),
+			i32(atlas_w),
+			i32(atlas_h),
 			i32(i),
 			&xpos,
 			&ypos,
@@ -194,7 +225,7 @@ load_font :: proc(state: ^VulkanState) -> (font: ^Font, err: linux.Errno) {
 		}
 	}
 
-	upload_font_atlas(state, font, bitmap) or_return
+	upload_font_atlas(state, font, bitmap, atlas_w, atlas_h) or_return
 
 	dsl := state.text_renderer.pipeline.descriptor_set_layout
 	alloc_info := vk.DescriptorSetAllocateInfo {
@@ -225,7 +256,7 @@ load_font :: proc(state: ^VulkanState) -> (font: ^Font, err: linux.Errno) {
 	}
 	vk.UpdateDescriptorSets(state.device, 1, &write, 0, nil)
 
-	fmt.printfln("text: font loaded (%dx%d atlas)", ATLAS_WIDTH, ATLAS_HEIGHT)
+	fmt.printfln("text: font loaded (%dx%d atlas)", atlas_w, atlas_h)
 	return
 }
 
@@ -247,7 +278,14 @@ destroy_font :: proc(state: ^VulkanState, font: ^Font) {
 }
 
 @(private)
-upload_font_atlas :: proc(state: ^VulkanState, font: ^Font, bitmap: []u8) -> (err: linux.Errno) {
+upload_font_atlas :: proc(
+	state: ^VulkanState,
+	font: ^Font,
+	bitmap: []u8,
+	atlas_w, atlas_h: u32,
+) -> (
+	err: linux.Errno,
+) {
 	subresource_range := vk.ImageSubresourceRange {
 		aspectMask = {.COLOR},
 		levelCount = 1,
@@ -258,7 +296,7 @@ upload_font_atlas :: proc(state: ^VulkanState, font: ^Font, bitmap: []u8) -> (er
 		sType = .IMAGE_CREATE_INFO,
 		imageType = .D2,
 		format = .R8_UNORM,
-		extent = {width = ATLAS_WIDTH, height = ATLAS_HEIGHT, depth = 1},
+		extent = {width = atlas_w, height = atlas_h, depth = 1},
 		mipLevels = 1,
 		arrayLayers = 1,
 		samples = {._1},
@@ -374,7 +412,7 @@ upload_font_atlas :: proc(state: ^VulkanState, font: ^Font, bitmap: []u8) -> (er
 
 	copy_region := vk.BufferImageCopy {
 		imageSubresource = {aspectMask = {.COLOR}, layerCount = 1},
-		imageExtent = {width = ATLAS_WIDTH, height = ATLAS_HEIGHT, depth = 1},
+		imageExtent = {width = atlas_w, height = atlas_h, depth = 1},
 	}
 	vk.CmdCopyBufferToImage(
 		cmd,
