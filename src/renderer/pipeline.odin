@@ -43,7 +43,7 @@ initialize_rendering_pipeline :: proc(
 	layout_info := vk.PipelineLayoutCreateInfo {
 		sType = .PIPELINE_LAYOUT_CREATE_INFO,
 	}
-	if PushConstantCount > 0 {
+	when PushConstantCount > 0 {
 		push_constant_range = {
 			stageFlags = {.VERTEX, .FRAGMENT},
 			offset     = 0,
@@ -59,15 +59,15 @@ initialize_rendering_pipeline :: proc(
 		sType = .PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO,
 	}
 	attrs: []vk.VertexInputAttributeDescription = nil
-	defer if attrs != nil do delete(attrs)
 
-	if VertexType != typeid_of(NoVertex) {
+	when VertexType != NoVertex {
 		binding = {
 			binding   = 0,
 			stride    = size_of(VertexType),
 			inputRate = .VERTEX,
 		}
 		attrs = get_vertex_attribute_descriptions(VertexType, 0)
+		defer delete(attrs)
 		vertex_input_info.vertexBindingDescriptionCount = 1
 		vertex_input_info.pVertexBindingDescriptions = &binding
 		vertex_input_info.vertexAttributeDescriptionCount = u32(len(attrs))
@@ -196,7 +196,7 @@ apply_pipeline :: proc(
 		push_data,
 	)
 
-	if V == NoVertex {
+	when V == NoVertex {
 		// Full-screen triangle — no vertex buffer
 		vk.CmdDraw(command_buffer, 3, 1, 0, 0)
 	} else {
