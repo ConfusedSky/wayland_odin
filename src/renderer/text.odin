@@ -8,10 +8,12 @@ import stbtt "vendor:stb/truetype"
 import vk "vendor:vulkan"
 
 FONT_PATH :: "/usr/share/fonts/Adwaita/AdwaitaSans-Regular.ttf"
-FONT_PIXEL_SIZE :: f32(24)
+FONT_PIXEL_SIZE :: f32(18)
+FONT_OVERSAMPLE_H :: u32(4)
+FONT_OVERSAMPLE_V :: u32(4)
 
-ATLAS_WIDTH :: u32(512)
-ATLAS_HEIGHT :: u32(128)
+ATLAS_WIDTH :: u32(512 * 2)
+ATLAS_HEIGHT :: u32(256 * 2)
 GLYPH_FIRST :: 32
 GLYPH_COUNT :: 96
 
@@ -135,23 +137,27 @@ load_font :: proc(state: ^VulkanState) -> (font: ^Font, err: linux.Errno) {
 	bitmap := make([]u8, ATLAS_WIDTH * ATLAS_HEIGHT)
 	defer delete(bitmap)
 
-	chardata: [GLYPH_COUNT]stbtt.bakedchar
-	result := stbtt.BakeFontBitmap(
+	chardata: [GLYPH_COUNT]stbtt.packedchar
+	spc: stbtt.pack_context
+	if stbtt.PackBegin(&spc, raw_data(bitmap), i32(ATLAS_WIDTH), i32(ATLAS_HEIGHT), 0, 1, nil) ==
+	   0 {
+		fmt.eprintln("text: PackBegin failed")
+		err = .EINVAL
+		return
+	}
+	stbtt.PackSetOversampling(&spc, FONT_OVERSAMPLE_H, FONT_OVERSAMPLE_V)
+	pack_result := stbtt.PackFontRange(
+		&spc,
 		raw_data(font_data),
 		0,
 		FONT_PIXEL_SIZE,
-		raw_data(bitmap),
-		i32(ATLAS_WIDTH),
-		i32(ATLAS_HEIGHT),
 		GLYPH_FIRST,
 		GLYPH_COUNT,
 		&chardata[0],
 	)
-	if result <= 0 {
-		fmt.eprintln(
-			"text: BakeFontBitmap failed — atlas too small or bad font, result:",
-			result,
-		)
+	stbtt.PackEnd(&spc)
+	if pack_result == 0 {
+		fmt.eprintln("text: PackFontRange failed — atlas too small for oversampled glyphs")
 		err = .EINVAL
 		return
 	}
@@ -167,15 +173,24 @@ load_font :: proc(state: ^VulkanState) -> (font: ^Font, err: linux.Errno) {
 	)
 
 	for i in 0 ..< GLYPH_COUNT {
-		c := chardata[i]
-		w := f32(c.x1 - c.x0)
-		h := f32(c.y1 - c.y0)
+		xpos, ypos: f32
+		q: stbtt.aligned_quad
+		stbtt.GetPackedQuad(
+			&chardata[0],
+			i32(ATLAS_WIDTH),
+			i32(ATLAS_HEIGHT),
+			i32(i),
+			&xpos,
+			&ypos,
+			&q,
+			false,
+		)
 		font.glyphs[i] = GlyphInfo {
-			uv_min  = {f32(c.x0) / f32(ATLAS_WIDTH), f32(c.y0) / f32(ATLAS_HEIGHT)},
-			uv_max  = {f32(c.x1) / f32(ATLAS_WIDTH), f32(c.y1) / f32(ATLAS_HEIGHT)},
-			offset  = {c.xoff, c.yoff},
-			size    = {w, h},
-			advance = c.xadvance,
+			uv_min  = {q.s0, q.t0},
+			uv_max  = {q.s1, q.t1},
+			offset  = {q.x0, q.y0},
+			size    = {q.x1 - q.x0, q.y1 - q.y0},
+			advance = chardata[i].xadvance,
 		}
 	}
 
