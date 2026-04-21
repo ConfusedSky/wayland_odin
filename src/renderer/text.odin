@@ -35,14 +35,21 @@ Font :: struct {
 	descriptor_set:   vk.DescriptorSet,
 }
 
+TextAnchor :: enum int {
+	Baseline,
+	TopLeft,
+}
+
+TextData :: struct {
+	text:   string,
+	pos:    [2]f32,
+	style:  TextStyle,
+	anchor: TextAnchor,
+}
+
 TextStyle :: struct {
 	font:  ^Font,
 	color: [4]f32,
-}
-
-Rect :: struct {
-	pos:  [2]f32,
-	size: [2]f32,
 }
 
 TextVertex :: struct #packed {

@@ -172,27 +172,22 @@ render_frame :: proc(
 		},
 	)
 
-	rect := renderer.get_text_bounding_box_top_left(
-		"Hello, World!",
-		{f32(info.width), 0},
-		{font = state.font},
-	)
+	text := renderer.TextData {
+		text = "Hello, World!",
+		pos = {f32(info.width), 0},
+		style = {font = state.font, color = {1, 1, 1, 1}},
+		anchor = .TopLeft,
+	}
+	rect := renderer.get_bounding_box(text)
+	text.pos.x -= rect.size.x
 	fmt.println(rect)
+	shape := renderer.ShapeData {
+		data = renderer.RectData{pos = rect.pos - {rect.size.x, 0}, size = rect.size},
+		style = {fill_color = {1, 0, 0, 0.7}},
+	}
 
-	renderer.draw_text_top_left(
-		&state.vulkan,
-		"Hello, World!",
-		{f32(info.width) - rect.size.x, 0},
-		renderer.TextStyle{font = state.font, color = {1, 1, 1, 1}},
-	)
-
-	renderer.draw_shape(
-		&state.vulkan,
-		{
-			data = renderer.RectData{pos = rect.pos - {rect.size.x, 0}, size = rect.size},
-			style = {fill_color = {1, 0, 0, 0.7}},
-		},
-	)
+	renderer.draw(&state.vulkan, text)
+	renderer.draw(&state.vulkan, shape)
 
 	err = renderer.render_frame(
 		&state.vulkan,

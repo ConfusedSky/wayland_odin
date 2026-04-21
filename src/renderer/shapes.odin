@@ -132,6 +132,10 @@ draw_shape :: proc(state: ^VulkanState, shape: ShapeData) {
 	append(&state.shape_renderer.shape_data, shape)
 }
 
+get_shape_bounding_box :: proc(shape: ShapeData) -> Rect {
+	return get_shape_bounding_quad(shape)
+}
+
 // Called from render_frame after the grid draw, inside the render pass.
 end_shapes :: proc(
 	state: ^VulkanState,
@@ -169,10 +173,10 @@ end_shapes :: proc(
 
 @(private)
 expand_shape :: proc(sh: ShapeData, vertices: ^[dynamic]ShapeVertex) {
+	bounds := get_shape_bounding_quad(sh)
 	style := sh.style
 	angle := sh.transform.angle
 
-	min_x, min_y, max_x, max_y: f32
 	shape_type_f32: f32
 	gp0, gp1, gp2: [2]f32
 	vert_angle: f32
@@ -180,21 +184,7 @@ expand_shape :: proc(sh: ShapeData, vertices: ^[dynamic]ShapeVertex) {
 	switch data in sh.data {
 	case LineData:
 		half_width := data.width / 2
-		pad := half_width + 1
-		pivot := (data.p0 + data.p1) * 0.5
-		if angle != 0 {
-			r := linalg.length(data.p1 - data.p0) * 0.5 + pad
-			min_x = pivot.x - r
-			min_y = pivot.y - r
-			max_x = pivot.x + r
-			max_y = pivot.y + r
-			vert_angle = angle
-		} else {
-			min_x = min(data.p0.x, data.p1.x) - pad
-			min_y = min(data.p0.y, data.p1.y) - pad
-			max_x = max(data.p0.x, data.p1.x) + pad
-			max_y = max(data.p0.y, data.p1.y) + pad
-		}
+		if angle != 0 do vert_angle = angle
 		shape_type_f32 = f32(int(ShapeType.Line))
 		gp0 = data.p0
 		gp1 = data.p1
@@ -213,80 +203,33 @@ expand_shape :: proc(sh: ShapeData, vertices: ^[dynamic]ShapeVertex) {
 			shape_type_f32 = f32(int(ShapeType.RoundedRect))
 			gp2 = {d.corner_radius, 0}
 		}
-		pad := f32(1)
-		if angle != 0 {
-			r := linalg.length(half_size) + pad
-			min_x = center.x - r
-			min_y = center.y - r
-			max_x = center.x + r
-			max_y = center.y + r
-			vert_angle = angle
-		} else {
-			min_x = center.x - half_size.x - pad
-			min_y = center.y - half_size.y - pad
-			max_x = center.x + half_size.x + pad
-			max_y = center.y + half_size.y + pad
-		}
+		if angle != 0 do vert_angle = angle
 		gp0 = center
 		gp1 = half_size
 
 	case TriangleData:
-		pad := f32(1)
-		centroid := (data.p0 + data.p1 + data.p2) / 3.0
-		if angle != 0 {
-			r :=
-				max(
-					linalg.length(data.p0 - centroid),
-					linalg.length(data.p1 - centroid),
-					linalg.length(data.p2 - centroid),
-				) +
-				pad
-			min_x = centroid.x - r
-			min_y = centroid.y - r
-			max_x = centroid.x + r
-			max_y = centroid.y + r
-			vert_angle = angle
-		} else {
-			min_x = min(data.p0.x, data.p1.x, data.p2.x) - pad
-			min_y = min(data.p0.y, data.p1.y, data.p2.y) - pad
-			max_x = max(data.p0.x, data.p1.x, data.p2.x) + pad
-			max_y = max(data.p0.y, data.p1.y, data.p2.y) + pad
-		}
+		if angle != 0 do vert_angle = angle
 		shape_type_f32 = f32(int(ShapeType.Triangle))
 		gp0 = data.p0
 		gp1 = data.p1
 		gp2 = data.p2
 
 	case OvalData:
-		pad := f32(1)
-		if angle != 0 {
-			r := max(data.radii.x, data.radii.y) + pad
-			min_x = data.center.x - r
-			min_y = data.center.y - r
-			max_x = data.center.x + r
-			max_y = data.center.y + r
-			vert_angle = angle
-		} else {
-			min_x = data.center.x - data.radii.x - pad
-			min_y = data.center.y - data.radii.y - pad
-			max_x = data.center.x + data.radii.x + pad
-			max_y = data.center.y + data.radii.y + pad
-		}
+		if angle != 0 do vert_angle = angle
 		shape_type_f32 = f32(int(ShapeType.Oval))
 		gp0 = data.center
 		gp1 = data.radii
 
 	case CircleData:
-		r := data.radius + 1
-		min_x = data.center.x - r
-		min_y = data.center.y - r
-		max_x = data.center.x + r
-		max_y = data.center.y + r
 		shape_type_f32 = f32(int(ShapeType.Circle))
 		gp0 = data.center
 		gp2 = {data.radius, 0}
 	}
 
+	min_x := bounds.pos.x
+	min_y := bounds.pos.y
+	max_x := bounds.pos.x + bounds.size.x
+	max_y := bounds.pos.y + bounds.size.y
 	corners := [4][2]f32{{min_x, min_y}, {max_x, min_y}, {min_x, max_y}, {max_x, max_y}}
 	for c in corners {
 		append(
@@ -304,6 +247,101 @@ expand_shape :: proc(sh: ShapeData, vertices: ^[dynamic]ShapeVertex) {
 			},
 		)
 	}
+}
+
+@(private)
+get_shape_bounding_quad :: proc(shape: ShapeData) -> Rect {
+	angle := shape.transform.angle
+	min_x, min_y, max_x, max_y: f32
+
+	switch data in shape.data {
+	case LineData:
+		half_width := data.width / 2
+		pad := half_width + 1
+		pivot := (data.p0 + data.p1) * 0.5
+		if angle != 0 {
+			r := linalg.length(data.p1 - data.p0) * 0.5 + pad
+			min_x = pivot.x - r
+			min_y = pivot.y - r
+			max_x = pivot.x + r
+			max_y = pivot.y + r
+		} else {
+			min_x = min(data.p0.x, data.p1.x) - pad
+			min_y = min(data.p0.y, data.p1.y) - pad
+			max_x = max(data.p0.x, data.p1.x) + pad
+			max_y = max(data.p0.y, data.p1.y) + pad
+		}
+
+	case RectData, RoundedRectData:
+		half_size, center: [2]f32
+		#partial switch d in data {
+		case RectData:
+			half_size = d.size / 2
+			center = d.pos + half_size
+		case RoundedRectData:
+			half_size = d.size / 2
+			center = d.pos + half_size
+		}
+		pad := f32(1)
+		if angle != 0 {
+			r := linalg.length(half_size) + pad
+			min_x = center.x - r
+			min_y = center.y - r
+			max_x = center.x + r
+			max_y = center.y + r
+		} else {
+			min_x = center.x - half_size.x - pad
+			min_y = center.y - half_size.y - pad
+			max_x = center.x + half_size.x + pad
+			max_y = center.y + half_size.y + pad
+		}
+
+	case TriangleData:
+		pad := f32(1)
+		centroid := (data.p0 + data.p1 + data.p2) / 3.0
+		if angle != 0 {
+			r :=
+				max(
+					linalg.length(data.p0 - centroid),
+					linalg.length(data.p1 - centroid),
+					linalg.length(data.p2 - centroid),
+				) +
+				pad
+			min_x = centroid.x - r
+			min_y = centroid.y - r
+			max_x = centroid.x + r
+			max_y = centroid.y + r
+		} else {
+			min_x = min(data.p0.x, data.p1.x, data.p2.x) - pad
+			min_y = min(data.p0.y, data.p1.y, data.p2.y) - pad
+			max_x = max(data.p0.x, data.p1.x, data.p2.x) + pad
+			max_y = max(data.p0.y, data.p1.y, data.p2.y) + pad
+		}
+
+	case OvalData:
+		pad := f32(1)
+		if angle != 0 {
+			r := max(data.radii.x, data.radii.y) + pad
+			min_x = data.center.x - r
+			min_y = data.center.y - r
+			max_x = data.center.x + r
+			max_y = data.center.y + r
+		} else {
+			min_x = data.center.x - data.radii.x - pad
+			min_y = data.center.y - data.radii.y - pad
+			max_x = data.center.x + data.radii.x + pad
+			max_y = data.center.y + data.radii.y + pad
+		}
+
+	case CircleData:
+		r := data.radius + 1
+		min_x = data.center.x - r
+		min_y = data.center.y - r
+		max_x = data.center.x + r
+		max_y = data.center.y + r
+	}
+
+	return Rect{pos = {min_x, min_y}, size = {max_x - min_x, max_y - min_y}}
 }
 
 @(private)
