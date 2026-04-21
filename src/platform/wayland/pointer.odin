@@ -81,7 +81,7 @@ wl_pointer_handlers := wl_pointer.EventHandlers {
 		surface_x: f64,
 		surface_y: f64,
 		user_data: rawptr,
-	) {
+	) -> Errno {
 		client := (^Client)(user_data)
 		assert(client.cursor.initialized == true)
 
@@ -91,7 +91,8 @@ wl_pointer_handlers := wl_pointer.EventHandlers {
 			&client.cursor.surface,
 			i32(client.cursor.xhot),
 			i32(client.cursor.yhot),
-		)
+		) or_return
+		return nil
 	},
 	on_motion = proc(
 		source_object_id: u32,
@@ -99,13 +100,14 @@ wl_pointer_handlers := wl_pointer.EventHandlers {
 		surface_x: f64,
 		surface_y: f64,
 		user_data: rawptr,
-	) {
+	) -> Errno {
 		client := (^Client)(user_data)
 		client.pointer.x = surface_x
 		client.pointer.y = surface_y
 		if client.surface_state == .ATTACHED {
 			client.surface_state = .ACKED_CONFIGURE
 		}
+		return nil
 	},
 	on_button = proc(
 		source_object_id: u32,
@@ -114,9 +116,9 @@ wl_pointer_handlers := wl_pointer.EventHandlers {
 		button: u32,
 		state: wl_pointer.ButtonState,
 		user_data: rawptr,
-	) {
+	) -> Errno {
 		client := (^Client)(user_data)
-		if button != BTN_LEFT do return
+		if button != BTN_LEFT do return nil
 
 		is_pressed := state == .Pressed
 		was_down := client.pointer.left_button_down
@@ -130,6 +132,7 @@ wl_pointer_handlers := wl_pointer.EventHandlers {
 		if client.surface_state == .ATTACHED {
 			client.surface_state = .ACKED_CONFIGURE
 		}
+		return nil
 	},
 }
 

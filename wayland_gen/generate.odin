@@ -54,7 +54,7 @@ generate :: proc(output_dir: string, p: ^Protocol) -> bool {
 
 	for &iface in p.interfaces {
 		is_display := iface.name == "wl_display"
-		is_global  := !is_display && !non_globals[iface.name]
+		is_global := !is_display && !non_globals[iface.name]
 		if !generate_interface(output_dir, &iface, is_display, is_global, enums_pkg) do return false
 	}
 
@@ -117,7 +117,12 @@ generate_enums_package :: proc(output_dir: string, p: ^Protocol, enums_pkg: stri
 
 // Emits a fully-prefixed enum definition for the shared enums package.
 // e.g. iface_camel="WlShm", en.name="format" → "WlShmFormat :: enum u32 { ... }"
-emit_enum_definition :: proc(sb: ^strings.Builder, en: ^Enum, iface_camel: string, iface_name: string) {
+emit_enum_definition :: proc(
+	sb: ^strings.Builder,
+	en: ^Enum,
+	iface_camel: string,
+	iface_name: string,
+) {
 	enum_camel := to_camel_case(en.name)
 	defer delete(enum_camel)
 	prefixed := strings.concatenate({iface_camel, enum_camel})
@@ -133,7 +138,12 @@ emit_enum_definition :: proc(sb: ^strings.Builder, en: ^Enum, iface_camel: strin
 
 // Emits type aliases in the interface package that re-export enums from the shared enums package.
 // e.g. "Format :: wayland_enums.WlShmFormat"
-emit_enum_reexports :: proc(sb: ^strings.Builder, en: ^Enum, iface_name: string, enums_pkg: string) {
+emit_enum_reexports :: proc(
+	sb: ^strings.Builder,
+	en: ^Enum,
+	iface_name: string,
+	enums_pkg: string,
+) {
 	iface_camel := to_camel_case(iface_name)
 	defer delete(iface_camel)
 	enum_camel := to_camel_case(en.name)
@@ -184,7 +194,9 @@ collect_imports :: proc(
 			// Import packages for proxy return types (new_id) and proxy params (object).
 			// Cross-package enum refs are resolved through the shared enums package instead.
 			// Skip self-imports: the current interface is already in scope as ^t.
-			if (arg.type == "new_id" || arg.type == "object") && arg.interface != "" && arg.interface != iface.name {
+			if (arg.type == "new_id" || arg.type == "object") &&
+			   arg.interface != "" &&
+			   arg.interface != iface.name {
 				if !seen[arg.interface] {
 					seen[arg.interface] = true
 					append(&extra_pkgs, arg.interface)
@@ -242,7 +254,7 @@ generate_interface :: proc(
 	// linux is always needed for the proxy t struct (linux.Fd field).
 	// fmt is needed wherever we emit logging.
 	needs_fmt := has_requests || has_events || is_global
-	needs_bw  := has_requests || is_global
+	needs_bw := has_requests || is_global
 
 	strings.write_byte(&sb, '\n')
 	if needs_fmt do strings.write_string(&sb, "import \"core:fmt\"\n")
@@ -417,8 +429,8 @@ emit_request_proc :: proc(
 	strings.builder_init(&asserts_sb)
 	defer strings.builder_destroy(&asserts_sb)
 
-	fd_param          := ""
-	first_print_arg   := true
+	fd_param := ""
+	first_print_arg := true
 	needs_string_size := false
 
 	upper := to_upper_snake(req.name)
@@ -492,7 +504,11 @@ emit_request_proc :: proc(
 
 		switch {
 		case arg.enum_ref != "":
-			fmt.sbprintf(&write_calls_sb, "\tbuf_writer.write_u32(&writer, transmute(u32)%s)\n", param_name)
+			fmt.sbprintf(
+				&write_calls_sb,
+				"\tbuf_writer.write_u32(&writer, transmute(u32)%s)\n",
+				param_name,
+			)
 		case arg.type == "uint", arg.type == "object", arg.type == "new_id":
 			fmt.sbprintf(&write_calls_sb, "\tbuf_writer.write_u32(&writer, %s)\n", param_name)
 		case arg.type == "int":
@@ -647,7 +663,7 @@ emit_event_handler :: proc(sb: ^strings.Builder, ev: ^Event, enums_pkg: string) 
 		fmt.sbprintf(sb, "%s: %s", arg.name, type_str)
 	}
 	if len(ev.args) > 0 do strings.write_string(sb, ", ")
-	strings.write_string(sb, "user_data: rawptr)\n")
+	strings.write_string(sb, "user_data: rawptr) -> linux.Errno\n")
 }
 
 emit_event_handlers_struct :: proc(sb: ^strings.Builder, iface: ^Interface) {
@@ -663,7 +679,7 @@ emit_event_handlers_struct :: proc(sb: ^strings.Builder, iface: ^Interface) {
 emit_handle_event_proc :: proc(sb: ^strings.Builder, iface: ^Interface, enums_pkg: string) {
 	fmt.sbprintf(
 		sb,
-		"handle_event :: proc(object_id: u32, opcode: u16, msg: ^^u8, msg_len: ^int, handlers_raw: rawptr, user_data: rawptr, fds: ^[]linux.Fd) {{\n",
+		"handle_event :: proc(object_id: u32, opcode: u16, msg: ^^u8, msg_len: ^int, handlers_raw: rawptr, user_data: rawptr, fds: ^[]linux.Fd) -> linux.Errno {{\n",
 	)
 	fmt.sbprintf(sb, "\thandlers := (^EventHandlers)(handlers_raw)\n")
 	strings.write_string(sb, "\tswitch opcode {\n")
@@ -739,16 +755,19 @@ emit_handle_event_proc :: proc(sb: ^strings.Builder, iface: ^Interface, enums_pk
 			strings.to_string(print_args_sb),
 			ev.name,
 		)
+		fmt.sbprintf(sb, "\t\tif handlers.on_%s != nil {{\n", ev.name)
 		fmt.sbprintf(
 			sb,
-			"\t\tif handlers.on_%s != nil do handlers.on_%s(object_id, %suser_data)\n",
-			ev.name,
+			"\t\t\terr := handlers.on_%s(object_id, %suser_data)\n",
 			ev.name,
 			strings.to_string(call_args_sb),
 		)
+		strings.write_string(sb, "\t\t\tif err != nil do return err\n")
+		strings.write_string(sb, "\t\t}\n")
 	}
 
 	strings.write_string(sb, "\t}\n")
+	strings.write_string(sb, "\treturn nil\n")
 	strings.write_string(sb, "}\n")
 }
 

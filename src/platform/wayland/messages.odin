@@ -53,13 +53,18 @@ wayland_handle_messages :: proc(client: ^Client) -> Errno {
 	msg := &read_buf[0]
 	msg_len := int(read_bytes)
 	for msg_len > 0 {
-		wayland_handle_message(client, &msg, &msg_len, &fds)
+		wayland_handle_message(client, &msg, &msg_len, &fds) or_return
 	}
 	assert(len(fds) == 0, "not all fds were consumed by messages in this batch")
-	return client.last_err
+	return nil
 }
 
-wayland_handle_message :: proc(client: ^Client, msg: ^^u8, msg_len: ^int, fds: ^[]linux.Fd) {
+wayland_handle_message :: proc(
+	client: ^Client,
+	msg: ^^u8,
+	msg_len: ^int,
+	fds: ^[]linux.Fd,
+) -> Errno {
 	assert(msg_len^ >= 8)
 
 	object_id := buf_reader.read_u32(msg, msg_len)
@@ -86,7 +91,7 @@ wayland_handle_message :: proc(client: ^Client, msg: ^^u8, msg_len: ^int, fds: ^
 			handler.event_handlers,
 			handler.user_data,
 			fds,
-		)
+		) or_return
 	} else {
 		fmt.eprintfln(
 			"unknown event: object_id=%d opcode=%d size=%d skipping...",
@@ -102,4 +107,5 @@ wayland_handle_message :: proc(client: ^Client, msg: ^^u8, msg_len: ^int, fds: ^
 		msg^ = mem.ptr_offset(msg^, to_skip)
 		msg_len^ -= to_skip
 	}
+	return nil
 }

@@ -47,15 +47,16 @@ wl_output_handlers := wl_output.EventHandlers {
 		height: i32,
 		refresh: i32,
 		user_data: rawptr,
-	) {
+	) -> Errno {
 		data := (^OutputUserData)(user_data)
 		if .Current in flags {
 			assert(data.output != nil)
 			data.output.width = u32(width)
 			data.output.height = u32(height)
 		}
+		return nil
 	},
-	on_done = proc(source_object_id: u32, user_data: rawptr) {
+	on_done = proc(source_object_id: u32, user_data: rawptr) -> Errno {
 		data := (^OutputUserData)(user_data)
 		assert(data.output != nil)
 		data.output.is_done = true
@@ -76,5 +77,6 @@ wl_output_handlers := wl_output.EventHandlers {
 			data.client.max_width = max_width
 			data.client.max_height = max_height
 		}
+		return nil
 	},
 }

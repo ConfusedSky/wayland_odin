@@ -7,7 +7,13 @@ import "core:os"
 import "core:sys/linux"
 
 wl_display_handlers := wl_display.EventHandlers {
-	on_error = proc(_: u32, object_id: u32, code: u32, message: string, user_data: rawptr) {
+	on_error = proc(
+		_: u32,
+		object_id: u32,
+		code: u32,
+		message: string,
+		user_data: rawptr,
+	) -> linux.Errno {
 		fmt.printfln(
 			"FATAL wl_display error: target_object_id=%v code=%v error=%s",
 			object_id,
@@ -20,8 +26,7 @@ wl_display_handlers := wl_display.EventHandlers {
 			code,
 			message,
 		)
-		client := (^Client)(user_data)
-		client.last_err = .EPROTO
+		return .EPROTO
 	},
 }
 

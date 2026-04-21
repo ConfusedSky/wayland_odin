@@ -52,7 +52,6 @@ Client :: struct {
 	buf_height:       u32,
 	surface_state:    SurfaceState,
 	event_handlers:   [dynamic]RegisteredEventHandler,
-	last_err:         Errno,
 	running:          bool,
 	min_w:            i32,
 	min_h:            i32,
@@ -66,7 +65,7 @@ HandleEventProc :: proc(
 	handlers_raw: rawptr,
 	user_data: rawptr,
 	fds: ^[]linux.Fd,
-)
+) -> Errno
 
 RegisteredEventHandler :: struct {
 	event_handlers: rawptr,
@@ -140,7 +139,7 @@ pump :: proc(client: ^Client) -> Errno {
 	if can_initialize_surface(client) {
 		initialize_surface(client) or_return
 	}
-	return client.last_err
+	return nil
 }
 
 should_close :: proc(client: ^Client) -> bool {

@@ -27,26 +27,23 @@ on_wl_registry_global :: proc(
 	interface: string,
 	version: u32,
 	user_data: rawptr,
-) {
+) -> Errno {
 	client := (^Client)(user_data)
-	err: Errno
 	switch interface {
 	case "wl_seat":
-		err = initialize_seat(client, name, version)
+		return initialize_seat(client, name, version)
 	case "wl_shm":
-		err = initialize_wl_shm(client, name, version)
+		return initialize_wl_shm(client, name, version)
 	case "wl_output":
-		err = initialize_wl_output(client, name, version)
+		return initialize_wl_output(client, name, version)
 	case "xdg_wm_base":
-		err = initialize_xdg_wm_base(client, name, version)
+		return initialize_xdg_wm_base(client, name, version)
 	case "wl_compositor":
-		err = initialize_wl_compositor(client, name, version)
+		return initialize_wl_compositor(client, name, version)
 	case "zwp_linux_dmabuf_v1":
-		err = initialize_zwp_linux_dmabuf(client, name, version)
+		return initialize_zwp_linux_dmabuf(client, name, version)
 	}
-	if err != nil {
-		client.last_err = err
-	}
+	return nil
 }
 
 wl_registry_handlers := wl_registry.EventHandlers {

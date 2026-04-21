@@ -12,41 +12,43 @@ import xdg_wm_base "../../wayland_protocol/xdg_wm_base"
 wl_surface_handlers: wl_surface.EventHandlers
 
 xdg_wm_base_handlers := xdg_wm_base.EventHandlers {
-	on_ping = proc(_: u32, serial: u32, user_data: rawptr) {
+	on_ping = proc(_: u32, serial: u32, user_data: rawptr) -> Errno {
 		client := (^Client)(user_data)
-		err := xdg_wm_base.pong(&client.xdg_wm_base, serial)
-		if err != nil {
-			client.last_err = err
-		}
+		return xdg_wm_base.pong(&client.xdg_wm_base, serial)
 	},
 }
 
 xdg_toplevel_handlers := xdg_toplevel.EventHandlers {
-	on_close = proc(_: u32, user_data: rawptr) {
+	on_close = proc(_: u32, user_data: rawptr) -> Errno {
 		client := (^Client)(user_data)
 		client.running = false
+		return nil
 	},
-	on_configure = proc(_: u32, width: i32, height: i32, states: []u8, user_data: rawptr) {
+	on_configure = proc(
+		_: u32,
+		width: i32,
+		height: i32,
+		states: []u8,
+		user_data: rawptr,
+	) -> Errno {
 		client := (^Client)(user_data)
 		if width < client.min_w || height < client.min_h {
 			client.width = u32(client.min_w)
 			client.height = u32(client.min_h)
-			return
+			return nil
 		}
 		client.width = u32(width)
 		client.height = u32(height)
+		return nil
 	},
 }
 
 xdg_surface_handlers := xdg_surface.EventHandlers {
-	on_configure = proc(_: u32, serial: u32, user_data: rawptr) {
+	on_configure = proc(_: u32, serial: u32, user_data: rawptr) -> Errno {
 		client := (^Client)(user_data)
-		err := xdg_surface.ack_configure(&client.xdg_surface, serial)
-		if err != nil {
-			client.last_err = err
-			return
-		}
+		xdg_surface.ack_configure(&client.xdg_surface, serial) or_return
 		client.surface_state = .ACKED_CONFIGURE
+		return nil
 	},
 }
 

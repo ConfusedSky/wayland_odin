@@ -7,22 +7,15 @@ wl_seat_handlers := wl_seat.EventHandlers {
 		source_object_id: u32,
 		capabilities: wl_seat.Capability,
 		user_data: rawptr,
-	) {
+	) -> Errno {
 		client := (^Client)(user_data)
 		if .Keyboard in capabilities {
-			err := initialize_keyboard(client)
-			if err != nil {
-				client.last_err = err
-				return
-			}
+			initialize_keyboard(client) or_return
 		}
 		if .Pointer in capabilities {
-			err := initialize_pointer(client)
-			if err != nil {
-				client.last_err = err
-				return
-			}
+			initialize_pointer(client) or_return
 		}
+		return nil
 	},
 }
 
