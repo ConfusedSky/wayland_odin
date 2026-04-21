@@ -26,8 +26,8 @@ wl_display_handlers := wl_display.EventHandlers {
 
 initialize_display :: proc(client: ^Client) -> Errno {
 	socket_fd := wayland_display_connect() or_return
-	client.wl_display = wl_display.init(socket_fd, &client.logger)
-	wl_display_handlers.logger = &client.logger
+	client.wl_display = wl_display.init(socket_fd, client.logger)
+	wl_display_handlers.logger = client.logger
 	register_event_handler(client, 1, &wl_display_handlers, wl_display.handle_event)
 	return nil
 }

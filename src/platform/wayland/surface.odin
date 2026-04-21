@@ -54,7 +54,7 @@ xdg_surface_handlers := xdg_surface.EventHandlers {
 
 initialize_xdg_wm_base :: proc(client: ^Client, name: u32, version: u32) -> Errno {
 	client.xdg_wm_base = xdg_wm_base.from_global(&client.wl_registry, name, version) or_return
-	xdg_wm_base_handlers.logger = &client.logger
+	xdg_wm_base_handlers.logger = client.logger
 	register_event_handler(
 		client,
 		client.xdg_wm_base.id,
@@ -66,7 +66,7 @@ initialize_xdg_wm_base :: proc(client: ^Client, name: u32, version: u32) -> Errn
 
 initialize_wl_surface :: proc(client: ^Client) -> Errno {
 	client.wl_surface = wl_compositor.create_surface(&client.wl_compositor) or_return
-	wl_surface_handlers.logger = &client.logger
+	wl_surface_handlers.logger = client.logger
 	register_event_handler(
 		client,
 		client.wl_surface.id,
@@ -81,7 +81,7 @@ initialize_xdg_surface :: proc(client: ^Client) -> Errno {
 		&client.xdg_wm_base,
 		&client.wl_surface,
 	) or_return
-	xdg_surface_handlers.logger = &client.logger
+	xdg_surface_handlers.logger = client.logger
 	register_event_handler(
 		client,
 		client.xdg_surface.id,
@@ -93,7 +93,7 @@ initialize_xdg_surface :: proc(client: ^Client) -> Errno {
 
 initialize_xdg_toplevel :: proc(client: ^Client) -> Errno {
 	client.xdg_toplevel = xdg_surface.get_toplevel(&client.xdg_surface) or_return
-	xdg_toplevel_handlers.logger = &client.logger
+	xdg_toplevel_handlers.logger = client.logger
 	register_event_handler(
 		client,
 		client.xdg_toplevel.id,
@@ -136,7 +136,7 @@ initialize_buffer :: proc(
 		wl_buffer.destroy(&client.wl_buffer) or_return
 	}
 	client.wl_buffer = import_as_wl_buffer(client, buf, width, height) or_return
-	wl_buffer_handlers.logger = &client.logger
+	wl_buffer_handlers.logger = client.logger
 	register_event_handler(
 		client,
 		client.wl_buffer.id,
@@ -170,7 +170,7 @@ present_dmabuf :: proc(client: ^Client, buf: ^renderer.VulkanFrameBuffer) -> Err
 	) or_return
 
 	frame_cb := wl_surface.frame(&client.wl_surface) or_return
-	wl_callback_handlers.logger = &client.logger
+	wl_callback_handlers.logger = client.logger
 	register_event_handler(client, frame_cb.id, &wl_callback_handlers, wl_callback.handle_event)
 
 	client.buffer_ready = false

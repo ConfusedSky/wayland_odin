@@ -8,18 +8,29 @@ import "core:fmt"
 import "core:math"
 import "core:sys/linux"
 
+log_blacklist: []string : {
+	"app.frame.draw",
+	"wayland.request.wl_surface.attach",
+	"wayland.request.wl_surface.damage_buffer",
+	"wayland.request.wl_surface.frame",
+	"wayland.request.wl_surface.commit",
+	"wayland.event.wl_callback.done",
+	"wayland.event.wl_display.delete_id",
+	"wayland.event.wl_pointer.motion",
+	"wayland.event.wl_pointer.frame",
+	"wayland.event.xdg_wm_base.ping",
+	"wayland.request.xdg_wm_base.pong",
+	"platform.recv_batch",
+}
+
 initialize :: proc(
 	state: ^State,
-	log_blacklist: []string,
+	logger: ^runtime_log.Logger,
 	max_width: u32,
 	max_height: u32,
 ) -> linux.Errno {
-	runtime_log.initialize(&state.logger, log_blacklist)
-	renderer.initialize_vulkan(&state.vulkan, &state.logger) or_return
-	renderer.initialize_grid_pipeline(&state.vulkan) or_return
-	renderer.initialize_vulkan_commands(&state.vulkan) or_return
-	renderer.initialize_shape_renderer(&state.vulkan) or_return
-	renderer.initialize_text_renderer(&state.vulkan) or_return
+	state.logger = logger
+	renderer.initialize_vulkan(&state.vulkan, logger) or_return
 
 	font, font_err := renderer.load_font(&state.vulkan)
 	if font_err != nil do return font_err
@@ -43,7 +54,7 @@ shutdown :: proc(state: ^State) {
 		renderer.free_vulkan_buffer(&state.vulkan, &state.frame_buf)
 	}
 	delete(state.objects)
-	runtime_log.cleanup(&state.logger)
+	state.logger = nil
 	renderer.cleanup_vulkan(&state.vulkan)
 	state.initialized = false
 }
@@ -58,7 +69,7 @@ render_frame :: proc(
 	assert(state.frame_buf.memory != 0)
 	assert(info.width > 0 && info.height > 0)
 
-	if runtime_log.should_log(&state.logger, "app.frame.draw") {
+	if runtime_log.should_log(state.logger, "app.frame.draw") {
 		fmt.printfln("Drawing next frame")
 	}
 

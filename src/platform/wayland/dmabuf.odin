@@ -49,7 +49,7 @@ initialize_zwp_linux_dmabuf :: proc(client: ^Client, name: u32, version: u32) ->
 		name,
 		version,
 	) or_return
-	zwp_linux_dmabuf_handlers.logger = &client.logger
+	zwp_linux_dmabuf_handlers.logger = client.logger
 	register_event_handler(
 		client,
 		client.zwp_linux_dmabuf.id,

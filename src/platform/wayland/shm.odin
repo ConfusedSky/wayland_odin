@@ -16,7 +16,7 @@ wl_shm_handlers: wl_shm.EventHandlers
 
 initialize_wl_shm :: proc(client: ^Client, name: u32, version: u32) -> Errno {
 	client.wl_shm = wl_shm.from_global(&client.wl_registry, name, version) or_return
-	wl_shm_handlers.logger = &client.logger
+	wl_shm_handlers.logger = client.logger
 	register_event_handler(client, client.wl_shm.id, &wl_shm_handlers, wl_shm.handle_event)
 	return nil
 }

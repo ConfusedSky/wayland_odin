@@ -28,7 +28,7 @@ wayland_handle_messages :: proc(client: ^Client) -> Errno {
 		return .ECONNRESET
 	}
 
-	if runtime_log.should_log(&client.logger, "platform.recv_batch") {
+	if runtime_log.should_log(client.logger, "platform.recv_batch") {
 		fmt.printfln("Received %d bytes", read_bytes)
 	}
 

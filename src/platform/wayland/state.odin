@@ -53,7 +53,7 @@ Client :: struct {
 	buf_height:       u32,
 	surface_state:    SurfaceState,
 	event_handlers:   [dynamic]RegisteredEventHandler,
-	logger:           runtime_log.Logger,
+	logger:           ^runtime_log.Logger,
 	running:          bool,
 	min_w:            i32,
 	min_h:            i32,
@@ -128,7 +128,7 @@ init :: proc(client: ^Client, params: ptypes.InitParams) -> Errno {
 	client.running = true
 	client.min_w = params.min_w
 	client.min_h = params.min_h
-	runtime_log.initialize(&client.logger, params.log_blacklist)
+	client.logger = params.logger
 	initialize_display(client) or_return
 	initialize_wl_registry(client) or_return
 	return nil
@@ -141,7 +141,7 @@ pump :: proc(client: ^Client) -> Errno {
 			&client.wl_compositor,
 			&client.wl_shm,
 			&client.cursor,
-			&client.logger,
+			client.logger,
 		) or_return
 	}
 	if can_initialize_surface(client) {
@@ -191,7 +191,6 @@ shutdown :: proc(client: ^Client) -> Errno {
 	if client.cursor.initialized {
 		cleanup_cursor(&client.cursor) or_return
 	}
-	runtime_log.cleanup(&client.logger)
 	wayland_display_connection_cleanup(client.wl_display.socket) or_return
 	return nil
 }

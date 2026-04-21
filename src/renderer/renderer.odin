@@ -70,6 +70,7 @@ vulkan_debug_callback :: proc "system" (
 
 initialize_vulkan :: proc(state: ^VulkanState, logger: ^runtime_log.Logger) -> linux.Errno {
 	state.logger = logger
+
 	lib, ok := dynlib.load_library("libvulkan.so.1")
 	if !ok {
 		fmt.eprintln("vulkan: failed to load libvulkan.so.1")
@@ -270,6 +271,11 @@ initialize_vulkan :: proc(state: ^VulkanState, logger: ^runtime_log.Logger) -> l
 		fmt.eprintln("vulkan: vkCreateRenderPass failed:", res)
 		return .EINVAL
 	}
+
+	initialize_grid_pipeline(state) or_return
+	initialize_vulkan_commands(state) or_return
+	initialize_shape_renderer(state) or_return
+	initialize_text_renderer(state) or_return
 
 	return nil
 }

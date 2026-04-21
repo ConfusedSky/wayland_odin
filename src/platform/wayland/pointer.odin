@@ -142,7 +142,7 @@ wl_pointer_handlers := wl_pointer.EventHandlers {
 
 initialize_pointer :: proc(client: ^Client) -> Errno {
 	client.wl_pointer = wl_seat.get_pointer(&client.wl_seat) or_return
-	wl_pointer_handlers.logger = &client.logger
+	wl_pointer_handlers.logger = client.logger
 	register_event_handler(
 		client,
 		client.wl_pointer.id,

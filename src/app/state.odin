@@ -24,7 +24,7 @@ State :: struct {
 	vulkan:      renderer.VulkanState,
 	frame_buf:   renderer.VulkanFrameBuffer,
 	font:        ^renderer.Font,
-	logger:      runtime_log.Logger,
+	logger:      ^runtime_log.Logger,
 	objects:     [dynamic]SceneObject,
 	drag:        DragState,
 	next_id:     int,

@@ -1,10 +1,12 @@
 package platform_types
 
+import runtime_log "../runtime_log"
+
 InitParams :: struct {
-	title:         string,
-	min_w:         i32,
-	min_h:         i32,
-	log_blacklist: []string,
+	title:  string,
+	min_w:  i32,
+	min_h:  i32,
+	logger: ^runtime_log.Logger,
 }
 
 FrameInfo :: struct {
