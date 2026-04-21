@@ -1,20 +1,17 @@
 package app
 
+import platform "../platform"
 import renderer "../renderer"
 import runtime_log "../runtime_log"
 
-Scene_Object_Kind :: enum {
-	Free,
-	Hello_World_Background,
-	Hello_World_Text,
-}
+Layout_Proc :: proc(object: ^Scene_Object, state: ^State, info: platform.FrameInfo)
 
 Scene_Object :: struct {
-	id:         int,
-	kind:       Scene_Object_Kind,
-	renderable: renderer.Renderable,
-	movable:    bool,
-	bounds:     renderer.Rect,
+	id:          int,
+	layout_proc: Layout_Proc,
+	renderable:  renderer.Renderable,
+	movable:     bool,
+	bounds:      renderer.Rect,
 }
 
 Drag_State :: struct {

@@ -158,7 +158,7 @@ ready_for_frame :: proc(client: ^Client) -> bool {
 	return client.buffer_ready && client.surface_state == .ACKED_CONFIGURE
 }
 
-frame_info :: proc(client: ^Client) -> ptypes.FrameInfo {
+consume_frame_info :: proc(client: ^Client) -> ptypes.FrameInfo {
 	info := ptypes.FrameInfo {
 		width   = client.width,
 		height  = client.height,
@@ -167,6 +167,12 @@ frame_info :: proc(client: ^Client) -> ptypes.FrameInfo {
 	client.pointer.left_button_pressed = false
 	client.pointer.left_button_released = false
 	return info
+}
+
+trigger_redraw :: proc(client: ^Client) {
+	if client.surface_state == .ATTACHED {
+		client.surface_state = .ACKED_CONFIGURE
+	}
 }
 
 max_surface_size :: proc(client: ^Client) -> (u32, u32) {

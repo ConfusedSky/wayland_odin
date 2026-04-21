@@ -31,8 +31,8 @@ ready_for_frame :: proc(ctx: ^Context) -> bool {
 	return impl.ready_for_frame(&ctx.impl)
 }
 
-frame_info :: proc(ctx: ^Context) -> FrameInfo {
-	return impl.frame_info(&ctx.impl)
+consume_frame_info :: proc(ctx: ^Context) -> FrameInfo {
+	return impl.consume_frame_info(&ctx.impl)
 }
 
 max_surface_size :: proc(ctx: ^Context) -> (u32, u32) {

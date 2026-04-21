@@ -2,7 +2,6 @@ package Main
 
 import app "./app"
 import platform "./platform"
-import runtime_log "./runtime_log"
 import "core:fmt"
 import "core:os"
 import "core:sys/posix"
@@ -55,9 +54,6 @@ run :: proc(ctx: ^platform.Context, app_state: ^app.State) -> platform.Errno {
 			"platform.recv_batch",
 		},
 	}
-	main_logger: runtime_log.Logger
-	runtime_log.initialize(&main_logger, params.log_blacklist)
-	defer runtime_log.cleanup(&main_logger)
 	platform.init(ctx, params) or_return
 
 	for running && !platform.should_close(ctx) {
@@ -74,7 +70,7 @@ run :: proc(ctx: ^platform.Context, app_state: ^app.State) -> platform.Errno {
 			continue
 		}
 
-		frame_info := platform.frame_info(ctx)
+		frame_info := platform.consume_frame_info(ctx)
 		rendered, render_err := app.render_frame(app_state, frame_info)
 		if render_err != nil {
 			return render_err
@@ -86,8 +82,6 @@ run :: proc(ctx: ^platform.Context, app_state: ^app.State) -> platform.Errno {
 		}
 	}
 
-	if runtime_log.should_log(&main_logger, "app.shutdown.signal") {
-		fmt.println("Got termination signal. Terminating...")
-	}
+	fmt.println("Got termination signal. Terminating...")
 	return nil
 }

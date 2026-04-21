@@ -112,9 +112,7 @@ wl_pointer_handlers := wl_pointer.EventHandlers {
 		client := (^Client)(user_data)
 		client.pointer.x = surface_x
 		client.pointer.y = surface_y
-		if client.surface_state == .ATTACHED {
-			client.surface_state = .ACKED_CONFIGURE
-		}
+		trigger_redraw(client)
 		return nil
 	},
 	on_button = proc(
@@ -137,9 +135,7 @@ wl_pointer_handlers := wl_pointer.EventHandlers {
 		if !is_pressed && was_down {
 			client.pointer.left_button_released = true
 		}
-		if client.surface_state == .ATTACHED {
-			client.surface_state = .ACKED_CONFIGURE
-		}
+		trigger_redraw(client)
 		return nil
 	},
 }

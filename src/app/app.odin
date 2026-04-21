@@ -69,7 +69,6 @@ render_frame :: proc(
 
 	update_drag(state, info)
 	layout_scene(state, info)
-	update_bounds(state)
 
 	renderer.start_shapes(&state.vulkan)
 	renderer.start_text(&state.vulkan)
@@ -101,7 +100,6 @@ initialize_scene :: proc(state: ^State) {
 			style = {fill_color = {1, 0.2, 0.2, 1}, border_color = {1, 1, 1, 1}, border_width = 4},
 		},
 		true,
-		.Free,
 	)
 	add_scene_object(
 		state,
@@ -114,7 +112,6 @@ initialize_scene :: proc(state: ^State) {
 			},
 		},
 		true,
-		.Free,
 	)
 	add_scene_object(
 		state,
@@ -127,7 +124,6 @@ initialize_scene :: proc(state: ^State) {
 			},
 		},
 		true,
-		.Free,
 	)
 	add_scene_object(
 		state,
@@ -141,7 +137,6 @@ initialize_scene :: proc(state: ^State) {
 			},
 		},
 		true,
-		.Free,
 	)
 	add_scene_object(
 		state,
@@ -150,7 +145,6 @@ initialize_scene :: proc(state: ^State) {
 			style = {fill_color = {1, 0.6, 0.1, 1}, border_color = {1, 1, 1, 1}, border_width = 4},
 		},
 		true,
-		.Free,
 	)
 	add_scene_object(
 		state,
@@ -167,7 +161,6 @@ initialize_scene :: proc(state: ^State) {
 			},
 		},
 		true,
-		.Free,
 	)
 	add_scene_object(
 		state,
@@ -176,7 +169,6 @@ initialize_scene :: proc(state: ^State) {
 			style = {fill_color = {1, 0.4, 0, 1}, border_color = {1, 1, 1, 1}, border_width = 4},
 		},
 		true,
-		.Free,
 	)
 	add_scene_object(
 		state,
@@ -185,7 +177,6 @@ initialize_scene :: proc(state: ^State) {
 			style = {fill_color = {0.5, 0, 1, 0.8}, border_color = {1, 1, 1, 1}, border_width = 4},
 		},
 		true,
-		.Free,
 	)
 	add_scene_object(
 		state,
@@ -194,7 +185,6 @@ initialize_scene :: proc(state: ^State) {
 			style = {fill_color = {1, 0.2, 0.5, 1}, border_color = {1, 1, 1, 1}, border_width = 4},
 		},
 		true,
-		.Free,
 	)
 	add_scene_object(
 		state,
@@ -207,7 +197,6 @@ initialize_scene :: proc(state: ^State) {
 			},
 		},
 		true,
-		.Free,
 	)
 	add_scene_object(
 		state,
@@ -216,7 +205,6 @@ initialize_scene :: proc(state: ^State) {
 			style = {fill_color = {1, 1, 1, 1}},
 		},
 		true,
-		.Free,
 	)
 	add_scene_object(
 		state,
@@ -225,8 +213,9 @@ initialize_scene :: proc(state: ^State) {
 			style = {fill_color = {0, 0.6, 1, 0.7}, border_color = {1, 1, 1, 1}, border_width = 4},
 		},
 		true,
-		.Free,
 	)
+	// layout_hello_world_text must be added before layout_hello_world_background
+	// since the background's layout reads the text object's current renderable.
 	add_scene_object(
 		state,
 		renderer.TextData {
@@ -235,28 +224,54 @@ initialize_scene :: proc(state: ^State) {
 			anchor = .TopLeft,
 		},
 		false,
-		.Hello_World_Text,
+		layout_hello_world_text,
 	)
 	add_scene_object(
 		state,
 		renderer.ShapeData{data = renderer.RectData{}, style = {fill_color = {1, 0, 0, 0.7}}},
 		false,
-		.Hello_World_Background,
+		layout_hello_world_background,
 	)
+}
+
+layout_hello_world_text :: proc(object: ^Scene_Object, state: ^State, info: platform.FrameInfo) {
+	text := object_renderable_text(object)
+	text.pos = {f32(info.width), 0}
+	text.style.font = state.font
+	bounds := renderer.get_bounding_box(text)
+	text.pos.x -= bounds.size.x
+	object.renderable = text
+}
+
+layout_hello_world_background :: proc(
+	object: ^Scene_Object,
+	state: ^State,
+	_: platform.FrameInfo,
+) {
+	for other in state.objects {
+		if other.layout_proc == layout_hello_world_text {
+			text_bounds := renderer.get_bounding_box(other.renderable)
+			object.renderable = renderer.ShapeData {
+				data = renderer.RectData{pos = text_bounds.pos, size = text_bounds.size},
+				style = {fill_color = {1, 0, 0, 0.7}},
+			}
+			return
+		}
+	}
 }
 
 add_scene_object :: proc(
 	state: ^State,
 	renderable: renderer.Renderable,
 	movable: bool,
-	kind: Scene_Object_Kind,
+	layout_proc: Layout_Proc = nil,
 ) {
 	object := Scene_Object {
-		id         = state.next_id,
-		kind       = kind,
-		renderable = renderable,
-		movable    = movable,
-		bounds     = renderer.get_bounding_box(renderable),
+		id          = state.next_id,
+		layout_proc = layout_proc,
+		renderable  = renderable,
+		movable     = movable,
+		bounds      = renderer.get_bounding_box(renderable),
 	}
 	append(&state.objects, object)
 	state.next_id += 1
@@ -265,28 +280,10 @@ add_scene_object :: proc(
 layout_scene :: proc(state: ^State, info: platform.FrameInfo) {
 	for i in 0 ..< len(state.objects) {
 		object := &state.objects[i]
-		switch object.kind {
-		case .Hello_World_Text:
-			text := object_renderable_text(object)
-			text.pos = {f32(info.width), 0}
-			text.style.font = state.font
-			bounds := renderer.get_bounding_box(text)
-			text.pos.x -= bounds.size.x
-			object.renderable = text
-		case .Hello_World_Background:
-			text_bounds := find_object_bounds_by_kind(state, .Hello_World_Text)
-			object.renderable = renderer.ShapeData {
-				data = renderer.RectData{pos = text_bounds.pos, size = text_bounds.size},
-				style = {fill_color = {1, 0, 0, 0.7}},
-			}
-		case .Free:
+		if object.layout_proc != nil {
+			object.layout_proc(object, state, info)
+			object.bounds = renderer.get_bounding_box(object.renderable)
 		}
-	}
-}
-
-update_bounds :: proc(state: ^State) {
-	for i in 0 ..< len(state.objects) {
-		state.objects[i].bounds = renderer.get_bounding_box(state.objects[i].renderable)
 	}
 }
 
@@ -346,15 +343,6 @@ find_object_index_by_id :: proc(state: ^State, id: int) -> (int, bool) {
 		}
 	}
 	return 0, false
-}
-
-find_object_bounds_by_kind :: proc(state: ^State, kind: Scene_Object_Kind) -> renderer.Rect {
-	for object in state.objects {
-		if object.kind == kind {
-			return renderer.get_bounding_box(object.renderable)
-		}
-	}
-	return {}
 }
 
 object_renderable_text :: proc(object: ^Scene_Object) -> renderer.TextData {
