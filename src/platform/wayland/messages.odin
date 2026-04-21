@@ -2,6 +2,7 @@ package wayland
 
 import buf_reader "../../buf_reader"
 import cmsg "../../cmsg"
+import runtime_log "../../runtime_log"
 import "core:fmt"
 import "core:mem"
 import "core:sys/linux"
@@ -27,7 +28,9 @@ wayland_handle_messages :: proc(client: ^Client) -> Errno {
 		return .ECONNRESET
 	}
 
-	fmt.printfln("Received %d bytes", read_bytes)
+	if runtime_log.should_log(&client.logger, "platform.recv_batch") {
+		fmt.printfln("Received %d bytes", read_bytes)
+	}
 
 	fd_buf: [dynamic]linux.Fd
 	fd_buf.allocator = context.temp_allocator

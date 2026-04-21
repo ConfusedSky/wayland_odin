@@ -7,6 +7,7 @@ import wl_registry "../../wayland_protocol/wl_registry"
 initialize_wl_registry :: proc(client: ^Client) -> Errno {
 	assert(client.wl_display.socket > 0)
 	client.wl_registry = wl_display.get_registry(&client.wl_display) or_return
+	wl_registry_handlers.logger = &client.logger
 	register_event_handler(
 		client,
 		client.wl_registry.id,

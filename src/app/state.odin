@@ -1,6 +1,7 @@
 package app
 
 import renderer "../renderer"
+import runtime_log "../runtime_log"
 
 Scene_Object_Kind :: enum {
 	Free,
@@ -26,6 +27,7 @@ State :: struct {
 	vulkan:      renderer.VulkanState,
 	frame_buf:   renderer.VulkanFrameBuffer,
 	font:        ^renderer.Font,
+	logger:      runtime_log.Logger,
 	objects:     [dynamic]Scene_Object,
 	drag:        Drag_State,
 	next_id:     int,

@@ -14,12 +14,6 @@ wl_display_handlers := wl_display.EventHandlers {
 		message: string,
 		user_data: rawptr,
 	) -> linux.Errno {
-		fmt.printfln(
-			"FATAL wl_display error: target_object_id=%v code=%v error=%s",
-			object_id,
-			code,
-			message,
-		)
 		fmt.eprintfln(
 			"fatal error: target_object_id=%v code=%v error=%s",
 			object_id,
@@ -32,7 +26,8 @@ wl_display_handlers := wl_display.EventHandlers {
 
 initialize_display :: proc(client: ^Client) -> Errno {
 	socket_fd := wayland_display_connect() or_return
-	client.wl_display = wl_display.init(socket_fd)
+	client.wl_display = wl_display.init(socket_fd, &client.logger)
+	wl_display_handlers.logger = &client.logger
 	register_event_handler(client, 1, &wl_display_handlers, wl_display.handle_event)
 	return nil
 }

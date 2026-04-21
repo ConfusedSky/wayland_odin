@@ -1,9 +1,10 @@
 package platform_types
 
 InitParams :: struct {
-	title: string,
-	min_w: i32,
-	min_h: i32,
+	title:         string,
+	min_w:         i32,
+	min_h:         i32,
+	log_blacklist: []string,
 }
 
 FrameInfo :: struct {

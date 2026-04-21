@@ -21,6 +21,7 @@ wl_seat_handlers := wl_seat.EventHandlers {
 
 initialize_seat :: proc(client: ^Client, name: u32, version: u32) -> Errno {
 	client.wl_seat = wl_seat.from_global(&client.wl_registry, name, version) or_return
+	wl_seat_handlers.logger = &client.logger
 	register_event_handler(client, client.wl_seat.id, &wl_seat_handlers, wl_seat.handle_event)
 	return nil
 }

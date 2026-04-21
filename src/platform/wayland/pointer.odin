@@ -1,6 +1,7 @@
 package wayland
 
 import constants "../../constants"
+import runtime_log "../../runtime_log"
 import wl_buffer "../../wayland_protocol/wl_buffer"
 import wl_compositor "../../wayland_protocol/wl_compositor"
 import wl_pointer "../../wayland_protocol/wl_pointer"
@@ -25,7 +26,12 @@ Cursor :: struct {
 	initialized: bool,
 }
 
-initialize_cursor :: proc(compositor: ^wl_compositor.t, shm: ^wl_shm.t, cursor: ^Cursor) -> Errno {
+initialize_cursor :: proc(
+	compositor: ^wl_compositor.t,
+	shm: ^wl_shm.t,
+	cursor: ^Cursor,
+	logger: ^runtime_log.Logger,
+) -> Errno {
 	assert(cursor.initialized == false)
 
 	xcursor_size_buf: [64]u8 = ---
@@ -38,7 +44,9 @@ initialize_cursor :: proc(compositor: ^wl_compositor.t, shm: ^wl_shm.t, cursor: 
 	defer xcursor.images_destroy(images)
 
 	image := images.images[0]
-	fmt.printfln("Loaded cursor %v", images.name)
+	if runtime_log.should_log(logger, "platform.cursor.loaded") {
+		fmt.printfln("Loaded cursor %v", images.name)
+	}
 	size := image.height * image.width * constants.COLOR_CHANNELS
 
 	cursor.xhot = image.xhot
@@ -138,6 +146,7 @@ wl_pointer_handlers := wl_pointer.EventHandlers {
 
 initialize_pointer :: proc(client: ^Client) -> Errno {
 	client.wl_pointer = wl_seat.get_pointer(&client.wl_seat) or_return
+	wl_pointer_handlers.logger = &client.logger
 	register_event_handler(
 		client,
 		client.wl_pointer.id,

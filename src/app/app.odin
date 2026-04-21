@@ -3,12 +3,19 @@ package app
 import constants "../constants"
 import platform "../platform"
 import renderer "../renderer"
+import runtime_log "../runtime_log"
 import "core:fmt"
 import "core:math"
 import "core:sys/linux"
 
-initialize :: proc(state: ^State, max_width: u32, max_height: u32) -> linux.Errno {
-	renderer.initialize_vulkan(&state.vulkan) or_return
+initialize :: proc(
+	state: ^State,
+	log_blacklist: []string,
+	max_width: u32,
+	max_height: u32,
+) -> linux.Errno {
+	runtime_log.initialize(&state.logger, log_blacklist)
+	renderer.initialize_vulkan(&state.vulkan, &state.logger) or_return
 	renderer.initialize_grid_pipeline(&state.vulkan) or_return
 	renderer.initialize_vulkan_commands(&state.vulkan) or_return
 	renderer.initialize_shape_renderer(&state.vulkan) or_return
@@ -36,6 +43,7 @@ shutdown :: proc(state: ^State) {
 		renderer.free_vulkan_buffer(&state.vulkan, &state.frame_buf)
 	}
 	delete(state.objects)
+	runtime_log.cleanup(&state.logger)
 	renderer.cleanup_vulkan(&state.vulkan)
 	state.initialized = false
 }
@@ -50,15 +58,15 @@ render_frame :: proc(
 	assert(state.frame_buf.memory != 0)
 	assert(info.width > 0 && info.height > 0)
 
-	fmt.printfln("Drawing next frame")
+	if runtime_log.should_log(&state.logger, "app.frame.draw") {
+		fmt.printfln("Drawing next frame")
+	}
 
 	if info.width < constants.NUM_CELLS || info.height < constants.NUM_CELLS {
 		fmt.eprintfln("State is too small to safely draw the next frame")
 		return false, nil
 	}
 
-	layout_scene(state, info)
-	update_bounds(state)
 	update_drag(state, info)
 	layout_scene(state, info)
 	update_bounds(state)

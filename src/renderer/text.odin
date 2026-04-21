@@ -1,5 +1,6 @@
 package renderer
 
+import runtime_log "../runtime_log"
 import "core:fmt"
 import "core:math"
 import "core:mem"
@@ -139,7 +140,9 @@ initialize_text_renderer :: proc(state: ^VulkanState) -> (err: linux.Errno) {
 	}
 	initialize_rendering_pipeline(state, &t.pipeline, &info) or_return
 
-	fmt.printfln("text: renderer initialized")
+	if runtime_log.should_log(state.logger, "renderer.text.renderer_initialized") {
+		fmt.printfln("text: renderer initialized")
+	}
 	return nil
 }
 
@@ -263,7 +266,9 @@ load_font :: proc(state: ^VulkanState) -> (font: ^Font, err: linux.Errno) {
 	}
 	vk.UpdateDescriptorSets(state.device, 1, &write, 0, nil)
 
-	fmt.printfln("text: font loaded (%dx%d atlas)", atlas_w, atlas_h)
+	if runtime_log.should_log(state.logger, "renderer.text.font_loaded") {
+		fmt.printfln("text: font loaded (%dx%d atlas)", atlas_w, atlas_h)
+	}
 	return
 }
 

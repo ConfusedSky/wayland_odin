@@ -1,5 +1,6 @@
 package renderer
 
+import runtime_log "../runtime_log"
 import "base:runtime"
 import "core:dynlib"
 import "core:fmt"
@@ -12,6 +13,7 @@ DRM_FORMAT_ARGB8888 :: u32(0x34325241)
 DRM_FORMAT_MOD_LINEAR :: u64(0)
 
 VulkanState :: struct {
+	logger:          ^runtime_log.Logger,
 	lib:             dynlib.Library,
 	instance:        vk.Instance,
 	debug_messenger: vk.DebugUtilsMessengerEXT,
@@ -66,7 +68,8 @@ vulkan_debug_callback :: proc "system" (
 	return false
 }
 
-initialize_vulkan :: proc(state: ^VulkanState) -> linux.Errno {
+initialize_vulkan :: proc(state: ^VulkanState, logger: ^runtime_log.Logger) -> linux.Errno {
+	state.logger = logger
 	lib, ok := dynlib.load_library("libvulkan.so.1")
 	if !ok {
 		fmt.eprintln("vulkan: failed to load libvulkan.so.1")
@@ -124,7 +127,9 @@ initialize_vulkan :: proc(state: ^VulkanState) -> linux.Errno {
 		return .EINVAL
 	}
 	vk.load_proc_addresses_instance(state.instance)
-	fmt.printfln("vulkan: instance created")
+	if runtime_log.should_log(state.logger, "renderer.vulkan.instance_created") {
+		fmt.printfln("vulkan: instance created")
+	}
 
 	if validation_available {
 		debug_messenger_info := vk.DebugUtilsMessengerCreateInfoEXT {
@@ -141,7 +146,7 @@ initialize_vulkan :: proc(state: ^VulkanState) -> linux.Errno {
 		); res != .SUCCESS {
 			fmt.eprintln("vulkan: failed to create debug messenger:", res)
 			// Non-fatal — continue without the messenger
-		} else {
+		} else if runtime_log.should_log(state.logger, "renderer.vulkan.validation_layers") {
 			fmt.printfln("vulkan: validation layers active")
 		}
 	}
@@ -172,7 +177,9 @@ initialize_vulkan :: proc(state: ^VulkanState) -> linux.Errno {
 	{
 		props: vk.PhysicalDeviceProperties
 		vk.GetPhysicalDeviceProperties(chosen, &props)
-		fmt.printfln("vulkan: selected device '%s'", cstring(&props.deviceName[0]))
+		if runtime_log.should_log(state.logger, "renderer.vulkan.device_selected") {
+			fmt.printfln("vulkan: selected device '%s'", cstring(&props.deviceName[0]))
+		}
 	}
 
 	qf_count: u32
@@ -192,7 +199,9 @@ initialize_vulkan :: proc(state: ^VulkanState) -> linux.Errno {
 		fmt.eprintln("vulkan: no graphics queue family found")
 		return .ENODEV
 	}
-	fmt.printfln("vulkan: graphics queue family %v", state.graphics_family)
+	if runtime_log.should_log(state.logger, "renderer.vulkan.graphics_queue_family") {
+		fmt.printfln("vulkan: graphics queue family %v", state.graphics_family)
+	}
 
 	priority: f32 = 1.0
 	queue_info := vk.DeviceQueueCreateInfo {
@@ -216,7 +225,9 @@ initialize_vulkan :: proc(state: ^VulkanState) -> linux.Errno {
 	vk.load_proc_addresses_device(state.device)
 
 	vk.GetDeviceQueue(state.device, state.graphics_family, 0, &state.graphics_queue)
-	fmt.printfln("vulkan: device and graphics queue ready")
+	if runtime_log.should_log(state.logger, "renderer.vulkan.device_ready") {
+		fmt.printfln("vulkan: device and graphics queue ready")
+	}
 
 	color_attachment := vk.AttachmentDescription {
 		format         = .B8G8R8A8_UNORM,
@@ -270,7 +281,9 @@ initialize_grid_pipeline :: proc(state: ^VulkanState) -> linux.Errno {
 	}
 	initialize_rendering_pipeline(state, &state.grid_pipeline, &info) or_return
 
-	fmt.printfln("vulkan: grid pipeline ready")
+	if runtime_log.should_log(state.logger, "renderer.vulkan.grid_pipeline_ready") {
+		fmt.printfln("vulkan: grid pipeline ready")
+	}
 	return nil
 }
 
@@ -308,7 +321,9 @@ initialize_vulkan_commands :: proc(state: ^VulkanState) -> linux.Errno {
 		return .EINVAL
 	}
 
-	fmt.printfln("vulkan: command buffer and fence ready")
+	if runtime_log.should_log(state.logger, "renderer.vulkan.command_ready") {
+		fmt.printfln("vulkan: command buffer and fence ready")
+	}
 	return nil
 }
 

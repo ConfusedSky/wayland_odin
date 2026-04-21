@@ -1,5 +1,6 @@
 package renderer
 
+import runtime_log "../runtime_log"
 import "core:c"
 import "core:fmt"
 import "core:sys/linux"
@@ -194,12 +195,14 @@ allocate_vulkan_buffer :: proc(
 		return {}, .EINVAL
 	}
 
-	fmt.printfln(
-		"vulkan: buffer allocated — stride=%v offset=%v fd=%v",
-		buf.stride,
-		buf.offset,
-		buf.dma_fd,
-	)
+	if runtime_log.should_log(vk_state.logger, "renderer.buffer.allocated") {
+		fmt.printfln(
+			"vulkan: buffer allocated — stride=%v offset=%v fd=%v",
+			buf.stride,
+			buf.offset,
+			buf.dma_fd,
+		)
+	}
 	return buf, nil
 }
 free_vulkan_buffer :: proc(vk_state: ^VulkanState, buf: ^VulkanFrameBuffer) {

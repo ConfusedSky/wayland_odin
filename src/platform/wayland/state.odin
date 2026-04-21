@@ -2,6 +2,7 @@ package wayland
 
 import constants "../../constants"
 import ptypes "../../platform_types"
+import runtime_log "../../runtime_log"
 import wl_buffer "../../wayland_protocol/wl_buffer"
 import wl_compositor "../../wayland_protocol/wl_compositor"
 import wl_display "../../wayland_protocol/wl_display"
@@ -52,6 +53,7 @@ Client :: struct {
 	buf_height:       u32,
 	surface_state:    SurfaceState,
 	event_handlers:   [dynamic]RegisteredEventHandler,
+	logger:           runtime_log.Logger,
 	running:          bool,
 	min_w:            i32,
 	min_h:            i32,
@@ -126,6 +128,7 @@ init :: proc(client: ^Client, params: ptypes.InitParams) -> Errno {
 	client.running = true
 	client.min_w = params.min_w
 	client.min_h = params.min_h
+	runtime_log.initialize(&client.logger, params.log_blacklist)
 	initialize_display(client) or_return
 	initialize_wl_registry(client) or_return
 	return nil
@@ -134,7 +137,12 @@ init :: proc(client: ^Client, params: ptypes.InitParams) -> Errno {
 pump :: proc(client: ^Client) -> Errno {
 	wayland_handle_messages(client) or_return
 	if !client.cursor.initialized && client.wl_compositor.id > 0 && client.wl_shm.id > 0 {
-		initialize_cursor(&client.wl_compositor, &client.wl_shm, &client.cursor) or_return
+		initialize_cursor(
+			&client.wl_compositor,
+			&client.wl_shm,
+			&client.cursor,
+			&client.logger,
+		) or_return
 	}
 	if can_initialize_surface(client) {
 		initialize_surface(client) or_return
@@ -177,6 +185,7 @@ shutdown :: proc(client: ^Client) -> Errno {
 	if client.cursor.initialized {
 		cleanup_cursor(&client.cursor) or_return
 	}
+	runtime_log.cleanup(&client.logger)
 	wayland_display_connection_cleanup(client.wl_display.socket) or_return
 	return nil
 }

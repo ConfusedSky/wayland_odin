@@ -259,6 +259,7 @@ generate_interface :: proc(
 	strings.write_byte(&sb, '\n')
 	if needs_fmt do strings.write_string(&sb, "import \"core:fmt\"\n")
 	strings.write_string(&sb, "import \"core:sys/linux\"\n")
+	if needs_fmt do strings.write_string(&sb, "import runtime_log \"../../runtime_log\"\n")
 	if needs_bw {
 		strings.write_string(&sb, "import buf_writer \"../../buf_writer\"\n")
 		strings.write_string(&sb, "import constants \"../../constants\"\n")
@@ -333,19 +334,24 @@ emit_proxy_type :: proc(sb: ^strings.Builder, is_display: bool, desc: Maybe(Desc
 		strings.write_string(sb, "t :: struct {\n")
 		strings.write_string(sb, "\tsocket:  linux.Fd,\n")
 		strings.write_string(sb, "\tnext_id: u32,\n")
+		strings.write_string(sb, "\tlogger:  ^runtime_log.Logger,\n")
 		strings.write_string(sb, "}\n\n")
 	} else {
 		strings.write_string(sb, "t :: struct {\n")
 		strings.write_string(sb, "\tsocket:  linux.Fd,\n")
 		strings.write_string(sb, "\tnext_id: ^u32,\n")
 		strings.write_string(sb, "\tid:      u32,\n")
+		strings.write_string(sb, "\tlogger:  ^runtime_log.Logger,\n")
 		strings.write_string(sb, "}\n\n")
 	}
 }
 
 emit_init_proc :: proc(sb: ^strings.Builder) {
-	strings.write_string(sb, "init :: proc(socket: linux.Fd) -> t {\n")
-	strings.write_string(sb, "\treturn {socket = socket, next_id = 1}\n")
+	strings.write_string(
+		sb,
+		"init :: proc(socket: linux.Fd, logger: ^runtime_log.Logger = nil) -> t {\n",
+	)
+	strings.write_string(sb, "\treturn {socket = socket, next_id = 1, logger = logger}\n")
 	strings.write_string(sb, "}\n\n")
 }
 
@@ -367,14 +373,19 @@ emit_from_global :: proc(sb: ^strings.Builder, iface_name: string) {
 	strings.write_string(sb, "\tbuf_writer.write_u32(&writer, id)\n")
 	fmt.sbprintf(
 		sb,
-		"\tfmt.printfln(\"-> wl_registry@%%v.bind: name=%%v interface=%s version=%%v id=%%v\", registry.id, name, version, id)\n",
+		"\tif runtime_log.should_log(registry.logger, \"wayland.request.wl_registry.bind\") {{\n",
+	)
+	fmt.sbprintf(
+		sb,
+		"\t\tfmt.printfln(\"-> wl_registry@%%v.bind: name=%%v interface=%s version=%%v id=%%v\", registry.id, name, version, id)\n",
 		iface_name,
 	)
+	strings.write_string(sb, "\t}\n")
 	strings.write_string(sb, "\terr := buf_writer.send(&writer, registry.socket)\n")
 	strings.write_string(sb, "\tif err != nil do return {}, err\n")
 	strings.write_string(
 		sb,
-		"\treturn t{socket = registry.socket, next_id = registry.next_id, id = id}, nil\n",
+		"\treturn t{socket = registry.socket, next_id = registry.next_id, id = id, logger = registry.logger}, nil\n",
 	)
 	strings.write_string(sb, "}\n\n")
 }
@@ -578,13 +589,21 @@ emit_request_proc :: proc(
 	// Log
 	fmt.sbprintf(
 		sb,
-		"\tfmt.printfln(\"-> %s@%%v.%s: %s\", %s%s)\n",
+		"\tif runtime_log.should_log(%s.logger, \"wayland.request.%s.%s\") {{\n",
+		iface_name,
+		iface_name,
+		req.name,
+	)
+	fmt.sbprintf(
+		sb,
+		"\t\tfmt.printfln(\"-> %s@%%v.%s: %s\", %s%s)\n",
 		iface_name,
 		req.name,
 		strings.to_string(print_fmt_sb),
 		obj_id_expr,
 		strings.to_string(print_args_sb),
 	)
+	strings.write_string(sb, "\t}\n")
 
 	// Send and return
 	if has_new_id {
@@ -601,16 +620,18 @@ emit_request_proc :: proc(
 		if is_display {
 			fmt.sbprintf(
 				sb,
-				"\treturn %s.t{{socket = %s.socket, next_id = &%s.next_id, id = new_id}}, err\n",
+				"\treturn %s.t{{socket = %s.socket, next_id = &%s.next_id, id = new_id, logger = %s.logger}}, err\n",
 				new_id_iface,
+				iface_name,
 				iface_name,
 				iface_name,
 			)
 		} else {
 			fmt.sbprintf(
 				sb,
-				"\treturn %s.t{{socket = %s.socket, next_id = %s.next_id, id = new_id}}, err\n",
+				"\treturn %s.t{{socket = %s.socket, next_id = %s.next_id, id = new_id, logger = %s.logger}}, err\n",
 				new_id_iface,
+				iface_name,
 				iface_name,
 				iface_name,
 			)
@@ -668,6 +689,7 @@ emit_event_handler :: proc(sb: ^strings.Builder, ev: ^Event, enums_pkg: string) 
 
 emit_event_handlers_struct :: proc(sb: ^strings.Builder, iface: ^Interface) {
 	strings.write_string(sb, "EventHandlers :: struct {\n")
+	strings.write_string(sb, "\tlogger: ^runtime_log.Logger,\n")
 	for &ev in iface.events {
 		handler_name := strings.concatenate({"On", to_camel_case(ev.name)})
 		defer delete(handler_name)
@@ -747,7 +769,13 @@ emit_handle_event_proc :: proc(sb: ^strings.Builder, iface: ^Interface, enums_pk
 		separator := " " if len(print_fmt) > 0 else ""
 		fmt.sbprintf(
 			sb,
-			"\t\tfmt.printfln(\"<- %s@%%v.%s: %s%s[%%s]\", object_id%s, \"handled\" if handlers.on_%s != nil else \"unhandled\")\n",
+			"\t\tif runtime_log.should_log(handlers.logger, \"wayland.event.%s.%s\") {{\n",
+			iface.name,
+			ev.name,
+		)
+		fmt.sbprintf(
+			sb,
+			"\t\t\tfmt.printfln(\"<- %s@%%v.%s: %s%s[%%s]\", object_id%s, \"handled\" if handlers.on_%s != nil else \"unhandled\")\n",
 			iface.name,
 			ev.name,
 			print_fmt,
@@ -755,6 +783,7 @@ emit_handle_event_proc :: proc(sb: ^strings.Builder, iface: ^Interface, enums_pk
 			strings.to_string(print_args_sb),
 			ev.name,
 		)
+		strings.write_string(sb, "\t\t}\n")
 		fmt.sbprintf(sb, "\t\tif handlers.on_%s != nil {{\n", ev.name)
 		fmt.sbprintf(
 			sb,

@@ -1,5 +1,6 @@
 package renderer
 
+import runtime_log "../runtime_log"
 import "core:fmt"
 import "core:math/linalg"
 import "core:slice"
@@ -109,7 +110,9 @@ initialize_shape_renderer :: proc(state: ^VulkanState) -> linux.Errno {
 	// Shape pipeline
 	initialize_shape_pipeline(state) or_return
 
-	fmt.printfln("shapes: renderer initialized")
+	if runtime_log.should_log(state.logger, "renderer.shapes.renderer_initialized") {
+		fmt.printfln("shapes: renderer initialized")
+	}
 	return nil
 }
 
@@ -355,6 +358,8 @@ initialize_shape_pipeline :: proc(state: ^VulkanState) -> linux.Errno {
 	}
 	initialize_rendering_pipeline(state, &shapes.pipeline, &info) or_return
 
-	fmt.printfln("shapes: pipeline ready")
+	if runtime_log.should_log(state.logger, "renderer.shapes.pipeline_ready") {
+		fmt.printfln("shapes: pipeline ready")
+	}
 	return nil
 }

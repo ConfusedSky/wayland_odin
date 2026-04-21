@@ -2,6 +2,7 @@ package Main
 
 import app "./app"
 import platform "./platform"
+import runtime_log "./runtime_log"
 import "core:fmt"
 import "core:os"
 import "core:sys/posix"
@@ -35,7 +36,29 @@ main :: proc() {
 }
 
 run :: proc(ctx: ^platform.Context, app_state: ^app.State) -> platform.Errno {
-	platform.init(ctx, platform.InitParams{title = "odin", min_w = 50, min_h = 50}) or_return
+	params := platform.InitParams {
+		title         = "odin",
+		min_w         = 50,
+		min_h         = 50,
+		log_blacklist = {
+			"app.frame.draw",
+			"wayland.request.wl_surface.attach",
+			"wayland.request.wl_surface.damage_buffer",
+			"wayland.request.wl_surface.frame",
+			"wayland.request.wl_surface.commit",
+			"wayland.event.wl_callback.done",
+			"wayland.event.wl_display.delete_id",
+			"wayland.event.wl_pointer.motion",
+			"wayland.event.wl_pointer.frame",
+			"wayland.event.xdg_wm_base.ping",
+			"wayland.request.xdg_wm_base.pong",
+			"platform.recv_batch",
+		},
+	}
+	main_logger: runtime_log.Logger
+	runtime_log.initialize(&main_logger, params.log_blacklist)
+	defer runtime_log.cleanup(&main_logger)
+	platform.init(ctx, params) or_return
 
 	for running && !platform.should_close(ctx) {
 		platform.pump(ctx) or_return
@@ -43,7 +66,7 @@ run :: proc(ctx: ^platform.Context, app_state: ^app.State) -> platform.Errno {
 		if !app_state.initialized {
 			max_width, max_height := platform.max_surface_size(ctx)
 			if max_width > 0 && max_height > 0 {
-				app.initialize(app_state, max_width, max_height) or_return
+				app.initialize(app_state, params.log_blacklist, max_width, max_height) or_return
 			}
 		}
 
@@ -63,6 +86,8 @@ run :: proc(ctx: ^platform.Context, app_state: ^app.State) -> platform.Errno {
 		}
 	}
 
-	fmt.println("Got termination signal. Terminating...")
+	if runtime_log.should_log(&main_logger, "app.shutdown.signal") {
+		fmt.println("Got termination signal. Terminating...")
+	}
 	return nil
 }

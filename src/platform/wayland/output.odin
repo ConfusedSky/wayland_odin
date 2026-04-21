@@ -29,6 +29,7 @@ initialize_wl_output :: proc(client: ^Client, name: u32, version: u32) -> Errno 
 		client = client,
 		output = &client.outputs[client.output_count - 1],
 	}
+	wl_output_handlers.logger = &client.logger
 	register_event_handler(
 		client,
 		proxy.id,
