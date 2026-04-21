@@ -4,17 +4,17 @@ import platform "../platform"
 import renderer "../renderer"
 import runtime_log "../runtime_log"
 
-Layout_Proc :: proc(object: ^Scene_Object, state: ^State, info: platform.FrameInfo)
+LayoutProc :: proc(object: ^SceneObject, state: ^State, info: platform.FrameInfo)
 
-Scene_Object :: struct {
+SceneObject :: struct {
 	id:          int,
-	layout_proc: Layout_Proc,
+	layout_proc: LayoutProc,
 	renderable:  renderer.Renderable,
 	movable:     bool,
 	bounds:      renderer.Rect,
 }
 
-Drag_State :: struct {
+DragState :: struct {
 	active_object_id: int,
 	grab_offset:      [2]f32,
 	dragging:         bool,
@@ -25,8 +25,8 @@ State :: struct {
 	frame_buf:   renderer.VulkanFrameBuffer,
 	font:        ^renderer.Font,
 	logger:      runtime_log.Logger,
-	objects:     [dynamic]Scene_Object,
-	drag:        Drag_State,
+	objects:     [dynamic]SceneObject,
+	drag:        DragState,
 	next_id:     int,
 	initialized: bool,
 }

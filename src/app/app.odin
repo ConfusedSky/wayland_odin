@@ -28,7 +28,7 @@ initialize :: proc(
 	frame_buf, err := renderer.allocate_vulkan_buffer(&state.vulkan, max_width, max_height)
 	if err != nil do return err
 	state.frame_buf = frame_buf
-	state.objects = make([dynamic]Scene_Object)
+	state.objects = make([dynamic]SceneObject)
 	initialize_scene(state)
 	state.initialized = true
 	return nil
@@ -234,7 +234,7 @@ initialize_scene :: proc(state: ^State) {
 	)
 }
 
-layout_hello_world_text :: proc(object: ^Scene_Object, state: ^State, info: platform.FrameInfo) {
+layout_hello_world_text :: proc(object: ^SceneObject, state: ^State, info: platform.FrameInfo) {
 	text := object_renderable_text(object)
 	text.pos = {f32(info.width), 0}
 	text.style.font = state.font
@@ -243,11 +243,7 @@ layout_hello_world_text :: proc(object: ^Scene_Object, state: ^State, info: plat
 	object.renderable = text
 }
 
-layout_hello_world_background :: proc(
-	object: ^Scene_Object,
-	state: ^State,
-	_: platform.FrameInfo,
-) {
+layout_hello_world_background :: proc(object: ^SceneObject, state: ^State, _: platform.FrameInfo) {
 	for other in state.objects {
 		if other.layout_proc == layout_hello_world_text {
 			text_bounds := renderer.get_bounding_box(other.renderable)
@@ -264,9 +260,9 @@ add_scene_object :: proc(
 	state: ^State,
 	renderable: renderer.Renderable,
 	movable: bool,
-	layout_proc: Layout_Proc = nil,
+	layout_proc: LayoutProc = nil,
 ) {
-	object := Scene_Object {
+	object := SceneObject {
 		id          = state.next_id,
 		layout_proc = layout_proc,
 		renderable  = renderable,
@@ -345,7 +341,7 @@ find_object_index_by_id :: proc(state: ^State, id: int) -> (int, bool) {
 	return 0, false
 }
 
-object_renderable_text :: proc(object: ^Scene_Object) -> renderer.TextData {
+object_renderable_text :: proc(object: ^SceneObject) -> renderer.TextData {
 	#partial switch value in object.renderable {
 	case renderer.TextData:
 		return value
