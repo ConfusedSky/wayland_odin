@@ -31,10 +31,9 @@ Init_Params :: struct {
 }
 
 Frame_Info :: struct {
-	width:     u32,
-	height:    u32,
-	pointer_x: f64,
-	pointer_y: f64,
+	width:   u32,
+	height:  u32,
+	pointer: Pointer,
 }
 
 Client :: struct {
@@ -164,12 +163,14 @@ ready_for_frame :: proc(client: ^Client) -> bool {
 }
 
 frame_info :: proc(client: ^Client) -> Frame_Info {
-	return Frame_Info {
-		width = client.width,
-		height = client.height,
-		pointer_x = client.pointer.surface_x,
-		pointer_y = client.pointer.surface_y,
+	info := Frame_Info {
+		width   = client.width,
+		height  = client.height,
+		pointer = client.pointer,
 	}
+	client.pointer.left_button_pressed = false
+	client.pointer.left_button_released = false
+	return info
 }
 
 max_surface_size :: proc(client: ^Client) -> (u32, u32) {

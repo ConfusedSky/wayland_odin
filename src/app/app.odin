@@ -21,6 +21,8 @@ initialize :: proc(state: ^State, max_width: u32, max_height: u32) -> linux.Errn
 	frame_buf, err := renderer.allocate_vulkan_buffer(&state.vulkan, max_width, max_height)
 	if err != nil do return err
 	state.frame_buf = frame_buf
+	state.objects = make([dynamic]Scene_Object)
+	initialize_scene(state)
 	state.initialized = true
 	return nil
 }
@@ -33,6 +35,7 @@ shutdown :: proc(state: ^State) {
 	if state.frame_buf.memory != 0 {
 		renderer.free_vulkan_buffer(&state.vulkan, &state.frame_buf)
 	}
+	delete(state.objects)
 	renderer.cleanup_vulkan(&state.vulkan)
 	state.initialized = false
 }
@@ -54,19 +57,47 @@ render_frame :: proc(
 		return false, nil
 	}
 
+	layout_scene(state, info)
+	update_bounds(state)
+	update_drag(state, info)
+	layout_scene(state, info)
+	update_bounds(state)
+
 	renderer.start_shapes(&state.vulkan)
 	renderer.start_text(&state.vulkan)
 
-	renderer.draw_shape(
+	for object in state.objects {
+		renderer.draw(&state.vulkan, object.renderable)
+	}
+
+	err = renderer.render_frame(
 		&state.vulkan,
-		{
+		&state.frame_buf,
+		renderer.RenderParams {
+			width = info.width,
+			height = info.height,
+			pointer_x = f32(info.pointer.x),
+			pointer_y = f32(info.pointer.y),
+		},
+	)
+	if err != nil do return false, err
+
+	return true, nil
+}
+
+initialize_scene :: proc(state: ^State) {
+	add_scene_object(
+		state,
+		renderer.ShapeData {
 			data = renderer.LineData{p0 = {100, 100}, p1 = {400, 200}, width = 16, cap = .Round},
 			style = {fill_color = {1, 0.2, 0.2, 1}, border_color = {1, 1, 1, 1}, border_width = 4},
 		},
+		true,
+		.Free,
 	)
-	renderer.draw_shape(
-		&state.vulkan,
-		{
+	add_scene_object(
+		state,
+		renderer.ShapeData {
 			data = renderer.LineData{p0 = {100, 160}, p1 = {400, 260}, width = 24, cap = .Square},
 			style = {
 				fill_color = {0.2, 0.5, 1, 0.8},
@@ -74,11 +105,12 @@ render_frame :: proc(
 				border_width = 4,
 			},
 		},
+		true,
+		.Free,
 	)
-
-	renderer.draw_shape(
-		&state.vulkan,
-		{
+	add_scene_object(
+		state,
+		renderer.ShapeData {
 			data = renderer.RectData{pos = {120, 280}, size = {160, 80}},
 			style = {
 				fill_color = {0.3, 0.8, 0.3, 1},
@@ -86,10 +118,12 @@ render_frame :: proc(
 				border_width = 4,
 			},
 		},
+		true,
+		.Free,
 	)
-	renderer.draw_shape(
-		&state.vulkan,
-		{
+	add_scene_object(
+		state,
+		renderer.ShapeData {
 			data = renderer.RectData{pos = {280, 260}, size = {120, 120}},
 			transform = {angle = math.PI / 4, zindex = 1},
 			style = {
@@ -98,18 +132,21 @@ render_frame :: proc(
 				border_width = 4,
 			},
 		},
+		true,
+		.Free,
 	)
-
-	renderer.draw_shape(
-		&state.vulkan,
-		{
+	add_scene_object(
+		state,
+		renderer.ShapeData {
 			data = renderer.RoundedRectData{pos = {90, 395}, size = {140, 70}, corner_radius = 12},
 			style = {fill_color = {1, 0.6, 0.1, 1}, border_color = {1, 1, 1, 1}, border_width = 4},
 		},
+		true,
+		.Free,
 	)
-	renderer.draw_shape(
-		&state.vulkan,
-		{
+	add_scene_object(
+		state,
+		renderer.ShapeData {
 			data = renderer.RoundedRectData {
 				pos = {230, 390},
 				size = {160, 80},
@@ -121,33 +158,39 @@ render_frame :: proc(
 				border_width = 4,
 			},
 		},
+		true,
+		.Free,
 	)
-
-	renderer.draw_shape(
-		&state.vulkan,
-		{
+	add_scene_object(
+		state,
+		renderer.ShapeData {
 			data = renderer.TriangleData{p0 = {510, 110}, p1 = {590, 260}, p2 = {430, 260}},
 			style = {fill_color = {1, 0.4, 0, 1}, border_color = {1, 1, 1, 1}, border_width = 4},
 		},
+		true,
+		.Free,
 	)
-	renderer.draw_shape(
-		&state.vulkan,
-		{
+	add_scene_object(
+		state,
+		renderer.ShapeData {
 			data = renderer.TriangleData{p0 = {510, 290}, p1 = {570, 390}, p2 = {450, 390}},
 			style = {fill_color = {0.5, 0, 1, 0.8}, border_color = {1, 1, 1, 1}, border_width = 4},
 		},
+		true,
+		.Free,
 	)
-
-	renderer.draw_shape(
-		&state.vulkan,
-		{
+	add_scene_object(
+		state,
+		renderer.ShapeData {
 			data = renderer.OvalData{center = {210, 530}, radii = {90, 40}},
 			style = {fill_color = {1, 0.2, 0.5, 1}, border_color = {1, 1, 1, 1}, border_width = 4},
 		},
+		true,
+		.Free,
 	)
-	renderer.draw_shape(
-		&state.vulkan,
-		{
+	add_scene_object(
+		state,
+		renderer.ShapeData {
 			data = renderer.OvalData{center = {390, 530}, radii = {40, 70}},
 			style = {
 				fill_color = {0.2, 0.9, 0.4, 0.6},
@@ -155,51 +198,206 @@ render_frame :: proc(
 				border_width = 4,
 			},
 		},
+		true,
+		.Free,
 	)
-
-	renderer.draw_shape(
-		&state.vulkan,
-		{
+	add_scene_object(
+		state,
+		renderer.ShapeData {
 			data = renderer.CircleData{center = {530, 430}, radius = 45},
 			style = {fill_color = {1, 1, 1, 1}},
 		},
+		true,
+		.Free,
 	)
-	renderer.draw_shape(
-		&state.vulkan,
-		{
+	add_scene_object(
+		state,
+		renderer.ShapeData {
 			data = renderer.CircleData{center = {640, 430}, radius = 30},
 			style = {fill_color = {0, 0.6, 1, 0.7}, border_color = {1, 1, 1, 1}, border_width = 4},
 		},
+		true,
+		.Free,
 	)
-
-	text := renderer.TextData {
-		text = "Hello, World!",
-		pos = {f32(info.width), 0},
-		style = {font = state.font, color = {1, 1, 1, 1}},
-		anchor = .TopLeft,
-	}
-	rect := renderer.get_bounding_box(text)
-	text.pos.x -= rect.size.x
-	fmt.println(rect)
-	shape := renderer.ShapeData {
-		data = renderer.RectData{pos = rect.pos - {rect.size.x, 0}, size = rect.size},
-		style = {fill_color = {1, 0, 0, 0.7}},
-	}
-
-	renderer.draw(&state.vulkan, text)
-	renderer.draw(&state.vulkan, shape)
-
-	err = renderer.render_frame(
-		&state.vulkan,
-		&state.frame_buf,
-		renderer.RenderParams {
-			width = info.width,
-			height = info.height,
-			pointer_x = f32(info.pointer_x),
-			pointer_y = f32(info.pointer_y),
+	add_scene_object(
+		state,
+		renderer.TextData {
+			text = "Hello, World!",
+			style = {font = state.font, color = {1, 1, 1, 1}},
+			anchor = .TopLeft,
 		},
+		false,
+		.Hello_World_Text,
 	)
-	if err != nil do return false, err
+	add_scene_object(
+		state,
+		renderer.ShapeData{data = renderer.RectData{}, style = {fill_color = {1, 0, 0, 0.7}}},
+		false,
+		.Hello_World_Background,
+	)
+}
 
-	return true, nil
+add_scene_object :: proc(
+	state: ^State,
+	renderable: renderer.Renderable,
+	movable: bool,
+	kind: Scene_Object_Kind,
+) {
+	object := Scene_Object {
+		id         = state.next_id,
+		kind       = kind,
+		renderable = renderable,
+		movable    = movable,
+		bounds     = renderer.get_bounding_box(renderable),
+	}
+	append(&state.objects, object)
+	state.next_id += 1
+}
+
+layout_scene :: proc(state: ^State, info: platform.Frame_Info) {
+	for i in 0 ..< len(state.objects) {
+		object := &state.objects[i]
+		switch object.kind {
+		case .Hello_World_Text:
+			text := object_renderable_text(object)
+			text.pos = {f32(info.width), 0}
+			text.style.font = state.font
+			bounds := renderer.get_bounding_box(text)
+			text.pos.x -= bounds.size.x
+			object.renderable = text
+		case .Hello_World_Background:
+			text_bounds := find_object_bounds_by_kind(state, .Hello_World_Text)
+			object.renderable = renderer.ShapeData {
+				data = renderer.RectData{pos = text_bounds.pos, size = text_bounds.size},
+				style = {fill_color = {1, 0, 0, 0.7}},
+			}
+		case .Free:
+		}
+	}
+}
+
+update_bounds :: proc(state: ^State) {
+	for i in 0 ..< len(state.objects) {
+		state.objects[i].bounds = renderer.get_bounding_box(state.objects[i].renderable)
+	}
+}
+
+update_drag :: proc(state: ^State, info: platform.Frame_Info) {
+	pointer := [2]f32{f32(info.pointer.x), f32(info.pointer.y)}
+
+	if info.pointer.left_button_pressed {
+		idx, found := hit_test(state, pointer)
+		if found {
+			object := &state.objects[idx]
+			state.drag.dragging = true
+			state.drag.active_object_id = object.id
+			state.drag.grab_offset = pointer - object.bounds.pos
+		}
+	}
+
+	if state.drag.dragging && info.pointer.left_button_down {
+		idx, found := find_object_index_by_id(state, state.drag.active_object_id)
+		if found {
+			object := &state.objects[idx]
+			target_pos := pointer - state.drag.grab_offset
+			delta := target_pos - object.bounds.pos
+			translate_renderable(&object.renderable, delta)
+			object.bounds = renderer.get_bounding_box(object.renderable)
+		}
+	}
+
+	if info.pointer.left_button_released {
+		state.drag = {}
+	}
+}
+
+hit_test :: proc(state: ^State, point: [2]f32) -> (int, bool) {
+	for i := len(state.objects) - 1; i >= 0; i -= 1 {
+		object := state.objects[i]
+		if !object.movable do continue
+		if point_in_rect(point, object.bounds) {
+			return i, true
+		}
+	}
+	return 0, false
+}
+
+point_in_rect :: proc(point: [2]f32, rect: renderer.Rect) -> bool {
+	return(
+		point.x >= rect.pos.x &&
+		point.y >= rect.pos.y &&
+		point.x <= rect.pos.x + rect.size.x &&
+		point.y <= rect.pos.y + rect.size.y \
+	)
+}
+
+find_object_index_by_id :: proc(state: ^State, id: int) -> (int, bool) {
+	for i in 0 ..< len(state.objects) {
+		if state.objects[i].id == id {
+			return i, true
+		}
+	}
+	return 0, false
+}
+
+find_object_bounds_by_kind :: proc(state: ^State, kind: Scene_Object_Kind) -> renderer.Rect {
+	for object in state.objects {
+		if object.kind == kind {
+			return renderer.get_bounding_box(object.renderable)
+		}
+	}
+	return {}
+}
+
+object_renderable_text :: proc(object: ^Scene_Object) -> renderer.TextData {
+	#partial switch value in object.renderable {
+	case renderer.TextData:
+		return value
+	}
+	panic("scene object is not text")
+}
+
+translate_renderable :: proc(renderable: ^renderer.Renderable, delta: [2]f32) {
+	switch value in renderable^ {
+	case renderer.ShapeData:
+		shape := value
+		translate_shape(&shape, delta)
+		renderable^ = shape
+	case renderer.TextData:
+		text := value
+		text.pos += delta
+		renderable^ = text
+	}
+}
+
+translate_shape :: proc(shape: ^renderer.ShapeData, delta: [2]f32) {
+	switch data in shape.data {
+	case renderer.LineData:
+		line := data
+		line.p0 += delta
+		line.p1 += delta
+		shape.data = line
+	case renderer.RectData:
+		rect := data
+		rect.pos += delta
+		shape.data = rect
+	case renderer.RoundedRectData:
+		rect := data
+		rect.pos += delta
+		shape.data = rect
+	case renderer.TriangleData:
+		triangle := data
+		triangle.p0 += delta
+		triangle.p1 += delta
+		triangle.p2 += delta
+		shape.data = triangle
+	case renderer.OvalData:
+		oval := data
+		oval.center += delta
+		shape.data = oval
+	case renderer.CircleData:
+		circle := data
+		circle.center += delta
+		shape.data = circle
+	}
 }

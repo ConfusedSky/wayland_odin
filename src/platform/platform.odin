@@ -5,7 +5,20 @@ import impl "./wayland"
 
 Errno :: impl.Errno
 Init_Params :: impl.Init_Params
-Frame_Info :: impl.Frame_Info
+
+Pointer :: struct {
+	x:                    f64,
+	y:                    f64,
+	left_button_down:     bool,
+	left_button_pressed:  bool,
+	left_button_released: bool,
+}
+
+Frame_Info :: struct {
+	width:   u32,
+	height:  u32,
+	pointer: Pointer,
+}
 
 Context :: struct {
 	impl: impl.Client,
@@ -28,7 +41,18 @@ ready_for_frame :: proc(ctx: ^Context) -> bool {
 }
 
 frame_info :: proc(ctx: ^Context) -> Frame_Info {
-	return impl.frame_info(&ctx.impl)
+	info := impl.frame_info(&ctx.impl)
+	return Frame_Info {
+		width = info.width,
+		height = info.height,
+		pointer = Pointer {
+			x = info.pointer.x,
+			y = info.pointer.y,
+			left_button_down = info.pointer.left_button_down,
+			left_button_pressed = info.pointer.left_button_pressed,
+			left_button_released = info.pointer.left_button_released,
+		},
+	}
 }
 
 max_surface_size :: proc(ctx: ^Context) -> (u32, u32) {

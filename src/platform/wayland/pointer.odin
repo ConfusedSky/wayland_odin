@@ -14,6 +14,8 @@ import "core:mem"
 import "core:os"
 import "core:strconv"
 
+BTN_LEFT :: 0x110
+
 Cursor :: struct {
 	pool:        ShmPool,
 	buffer:      wl_buffer.t,
@@ -72,8 +74,11 @@ cleanup_cursor :: proc(cursor: ^Cursor) -> Errno {
 }
 
 Pointer :: struct {
-	surface_x: f64,
-	surface_y: f64,
+	x:                    f64,
+	y:                    f64,
+	left_button_down:     bool,
+	left_button_pressed:  bool,
+	left_button_released: bool,
 }
 
 wl_pointer_handlers := wl_pointer.EventHandlers {
@@ -104,8 +109,32 @@ wl_pointer_handlers := wl_pointer.EventHandlers {
 		user_data: rawptr,
 	) {
 		client := (^Client)(user_data)
-		client.pointer.surface_x = surface_x
-		client.pointer.surface_y = surface_y
+		client.pointer.x = surface_x
+		client.pointer.y = surface_y
+		if client.surface_state == .ATTACHED {
+			client.surface_state = .ACKED_CONFIGURE
+		}
+	},
+	on_button = proc(
+		source_object_id: u32,
+		serial: u32,
+		time: u32,
+		button: u32,
+		state: wl_pointer.ButtonState,
+		user_data: rawptr,
+	) {
+		client := (^Client)(user_data)
+		if button != BTN_LEFT do return
+
+		is_pressed := state == .Pressed
+		was_down := client.pointer.left_button_down
+		client.pointer.left_button_down = is_pressed
+		if is_pressed && !was_down {
+			client.pointer.left_button_pressed = true
+		}
+		if !is_pressed && was_down {
+			client.pointer.left_button_released = true
+		}
 		if client.surface_state == .ATTACHED {
 			client.surface_state = .ACKED_CONFIGURE
 		}
