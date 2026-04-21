@@ -42,7 +42,7 @@ shutdown :: proc(state: ^State) {
 
 render_frame :: proc(
 	state: ^State,
-	info: platform.Frame_Info,
+	info: platform.FrameInfo,
 ) -> (
 	rendered: bool,
 	err: linux.Errno,
@@ -254,7 +254,7 @@ add_scene_object :: proc(
 	state.next_id += 1
 }
 
-layout_scene :: proc(state: ^State, info: platform.Frame_Info) {
+layout_scene :: proc(state: ^State, info: platform.FrameInfo) {
 	for i in 0 ..< len(state.objects) {
 		object := &state.objects[i]
 		switch object.kind {
@@ -282,7 +282,7 @@ update_bounds :: proc(state: ^State) {
 	}
 }
 
-update_drag :: proc(state: ^State, info: platform.Frame_Info) {
+update_drag :: proc(state: ^State, info: platform.FrameInfo) {
 	pointer := [2]f32{f32(info.pointer.x), f32(info.pointer.y)}
 
 	if info.pointer.left_button_pressed {

@@ -35,7 +35,7 @@ main :: proc() {
 }
 
 run :: proc(ctx: ^platform.Context, app_state: ^app.State) -> platform.Errno {
-	platform.init(ctx, platform.Init_Params{title = "odin", min_w = 50, min_h = 50}) or_return
+	platform.init(ctx, platform.InitParams{title = "odin", min_w = 50, min_h = 50}) or_return
 
 	for running && !platform.should_close(ctx) {
 		platform.pump(ctx) or_return

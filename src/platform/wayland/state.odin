@@ -1,6 +1,7 @@
 package wayland
 
 import constants "../../constants"
+import ptypes "../../platform_types"
 import wl_buffer "../../wayland_protocol/wl_buffer"
 import wl_compositor "../../wayland_protocol/wl_compositor"
 import wl_display "../../wayland_protocol/wl_display"
@@ -18,22 +19,10 @@ import "core:sys/linux"
 
 Errno :: linux.Errno
 
-Surface_State :: enum {
+SurfaceState :: enum {
 	NONE,
 	ACKED_CONFIGURE,
 	ATTACHED,
-}
-
-Init_Params :: struct {
-	title: string,
-	min_w: i32,
-	min_h: i32,
-}
-
-Frame_Info :: struct {
-	width:   u32,
-	height:  u32,
-	pointer: Pointer,
 }
 
 Client :: struct {
@@ -43,7 +32,7 @@ Client :: struct {
 	wl_seat:          wl_seat.t,
 	wl_keyboard:      wl_keyboard.t,
 	wl_pointer:       wl_pointer.t,
-	pointer:          Pointer,
+	pointer:          ptypes.Pointer,
 	wl_shm:           wl_shm.t,
 	zwp_linux_dmabuf: zwp_linux_dmabuf_v1.t,
 	wl_buffer:        wl_buffer.t,
@@ -61,7 +50,7 @@ Client :: struct {
 	max_height:       u32,
 	buf_width:        u32,
 	buf_height:       u32,
-	surface_state:    Surface_State,
+	surface_state:    SurfaceState,
 	event_handlers:   [dynamic]RegisteredEventHandler,
 	last_err:         Errno,
 	running:          bool,
@@ -134,7 +123,7 @@ find_event_handler :: proc(handlers: []RegisteredEventHandler, object_id: u32) -
 	return 0, false
 }
 
-init :: proc(client: ^Client, params: Init_Params) -> Errno {
+init :: proc(client: ^Client, params: ptypes.InitParams) -> Errno {
 	client.running = true
 	client.min_w = params.min_w
 	client.min_h = params.min_h
@@ -162,8 +151,8 @@ ready_for_frame :: proc(client: ^Client) -> bool {
 	return client.buffer_ready && client.surface_state == .ACKED_CONFIGURE
 }
 
-frame_info :: proc(client: ^Client) -> Frame_Info {
-	info := Frame_Info {
+frame_info :: proc(client: ^Client) -> ptypes.FrameInfo {
+	info := ptypes.FrameInfo {
 		width   = client.width,
 		height  = client.height,
 		pointer = client.pointer,

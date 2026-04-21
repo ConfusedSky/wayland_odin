@@ -1,30 +1,21 @@
 package platform
 
+import ptypes "../platform_types"
 import renderer "../renderer"
 import impl "./wayland"
+import "core:sys/linux"
 
-Errno :: impl.Errno
-Init_Params :: impl.Init_Params
+Errno :: linux.Errno
 
-Pointer :: struct {
-	x:                    f64,
-	y:                    f64,
-	left_button_down:     bool,
-	left_button_pressed:  bool,
-	left_button_released: bool,
-}
-
-Frame_Info :: struct {
-	width:   u32,
-	height:  u32,
-	pointer: Pointer,
-}
+InitParams :: ptypes.InitParams
+Pointer :: ptypes.Pointer
+FrameInfo :: ptypes.FrameInfo
 
 Context :: struct {
 	impl: impl.Client,
 }
 
-init :: proc(ctx: ^Context, params: Init_Params) -> Errno {
+init :: proc(ctx: ^Context, params: InitParams) -> Errno {
 	return impl.init(&ctx.impl, params)
 }
 
@@ -40,19 +31,8 @@ ready_for_frame :: proc(ctx: ^Context) -> bool {
 	return impl.ready_for_frame(&ctx.impl)
 }
 
-frame_info :: proc(ctx: ^Context) -> Frame_Info {
-	info := impl.frame_info(&ctx.impl)
-	return Frame_Info {
-		width = info.width,
-		height = info.height,
-		pointer = Pointer {
-			x = info.pointer.x,
-			y = info.pointer.y,
-			left_button_down = info.pointer.left_button_down,
-			left_button_pressed = info.pointer.left_button_pressed,
-			left_button_released = info.pointer.left_button_released,
-		},
-	}
+frame_info :: proc(ctx: ^Context) -> FrameInfo {
+	return impl.frame_info(&ctx.impl)
 }
 
 max_surface_size :: proc(ctx: ^Context) -> (u32, u32) {

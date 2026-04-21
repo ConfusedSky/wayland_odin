@@ -73,14 +73,6 @@ cleanup_cursor :: proc(cursor: ^Cursor) -> Errno {
 	return nil
 }
 
-Pointer :: struct {
-	x:                    f64,
-	y:                    f64,
-	left_button_down:     bool,
-	left_button_pressed:  bool,
-	left_button_released: bool,
-}
-
 wl_pointer_handlers := wl_pointer.EventHandlers {
 	on_enter = proc(
 		source_object_id: u32,
