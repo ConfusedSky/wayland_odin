@@ -1,7 +1,7 @@
 package Main
 
 import app "./app"
-import wayland "./platform/wayland"
+import platform "./platform"
 import "core:fmt"
 import "core:os"
 import "core:sys/posix"
@@ -22,44 +22,44 @@ main :: proc() {
 	posix.sigaction(.SIGINT, &sa, nil)
 	posix.sigaction(.SIGTERM, &sa, nil)
 
-	wl: wayland.Client
+	ctx: platform.Context
 	app_state: app.State
 
-	err := run(&wl, &app_state)
+	err := run(&ctx, &app_state)
 	app.shutdown(&app_state)
-	wayland.shutdown(&wl)
+	platform.shutdown(&ctx)
 	if err != nil {
 		fmt.eprintfln("Fatal error: %v", err)
 		os.exit(int(err))
 	}
 }
 
-run :: proc(wl: ^wayland.Client, app_state: ^app.State) -> wayland.Errno {
-	wayland.init(wl, wayland.Init_Params{title = "odin", min_w = 50, min_h = 50}) or_return
+run :: proc(ctx: ^platform.Context, app_state: ^app.State) -> platform.Errno {
+	platform.init(ctx, platform.Init_Params{title = "odin", min_w = 50, min_h = 50}) or_return
 
-	for running && !wayland.should_close(wl) {
-		wayland.pump(wl) or_return
+	for running && !platform.should_close(ctx) {
+		platform.pump(ctx) or_return
 
 		if !app_state.initialized {
-			max_width, max_height := wayland.max_surface_size(wl)
+			max_width, max_height := platform.max_surface_size(ctx)
 			if max_width > 0 && max_height > 0 {
 				app.initialize(app_state, max_width, max_height) or_return
 			}
 		}
 
-		if !app_state.initialized || !wayland.ready_for_frame(wl) {
+		if !app_state.initialized || !platform.ready_for_frame(ctx) {
 			continue
 		}
 
-		frame_info := wayland.frame_info(wl)
+		frame_info := platform.frame_info(ctx)
 		rendered, render_err := app.render_frame(app_state, frame_info)
 		if render_err != nil {
 			return render_err
 		}
 		if rendered {
-			wayland.present_dmabuf(wl, &app_state.frame_buf) or_return
+			platform.present_dmabuf(ctx, &app_state.frame_buf) or_return
 		} else {
-			wayland.skip_frame(wl)
+			platform.skip_frame(ctx)
 		}
 	}
 

@@ -1,7 +1,7 @@
 package app
 
 import constants "../constants"
-import wayland "../platform/wayland"
+import platform "../platform"
 import renderer "../renderer"
 import "core:fmt"
 import "core:math"
@@ -39,7 +39,7 @@ shutdown :: proc(state: ^State) {
 
 render_frame :: proc(
 	state: ^State,
-	info: wayland.Frame_Info,
+	info: platform.Frame_Info,
 ) -> (
 	rendered: bool,
 	err: linux.Errno,
