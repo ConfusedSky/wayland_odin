@@ -1,19 +1,18 @@
-package Main
+package wayland
 
-import constants "./constants"
+import constants "../../constants"
+import wl_buffer "../../wayland_protocol/wl_buffer"
+import wl_compositor "../../wayland_protocol/wl_compositor"
+import wl_pointer "../../wayland_protocol/wl_pointer"
+import wl_seat "../../wayland_protocol/wl_seat"
+import wl_shm "../../wayland_protocol/wl_shm"
+import wl_shm_pool "../../wayland_protocol/wl_shm_pool"
+import wl_surface "../../wayland_protocol/wl_surface"
+import xcursor "../../xcursor"
 import "core:fmt"
 import "core:mem"
 import "core:os"
 import "core:strconv"
-import "core:sys/linux"
-import wl_buffer "wayland_protocol/wl_buffer"
-import wl_compositor "wayland_protocol/wl_compositor"
-import wl_pointer "wayland_protocol/wl_pointer"
-import wl_seat "wayland_protocol/wl_seat"
-import wl_shm "wayland_protocol/wl_shm"
-import wl_shm_pool "wayland_protocol/wl_shm_pool"
-import wl_surface "wayland_protocol/wl_surface"
-import xcursor "xcursor"
 
 Cursor :: struct {
 	pool:        ShmPool,
@@ -86,15 +85,15 @@ wl_pointer_handlers := wl_pointer.EventHandlers {
 		surface_y: f64,
 		user_data: rawptr,
 	) {
-		state := (^state_t)(user_data)
-		assert(state.cursor.initialized == true)
+		client := (^Client)(user_data)
+		assert(client.cursor.initialized == true)
 
 		wl_pointer.set_cursor(
-			&state.wl_pointer,
+			&client.wl_pointer,
 			serial,
-			&state.cursor.surface,
-			i32(state.cursor.xhot),
-			i32(state.cursor.yhot),
+			&client.cursor.surface,
+			i32(client.cursor.xhot),
+			i32(client.cursor.yhot),
 		)
 	},
 	on_motion = proc(
@@ -104,20 +103,20 @@ wl_pointer_handlers := wl_pointer.EventHandlers {
 		surface_y: f64,
 		user_data: rawptr,
 	) {
-		state := (^state_t)(user_data)
-		state.pointer.surface_x = surface_x
-		state.pointer.surface_y = surface_y
-		if state.state == .STATE_SURFACE_ATTACHED {
-			state.state = .STATE_SURFACE_ACKED_CONFIGURE
+		client := (^Client)(user_data)
+		client.pointer.surface_x = surface_x
+		client.pointer.surface_y = surface_y
+		if client.surface_state == .ATTACHED {
+			client.surface_state = .ACKED_CONFIGURE
 		}
 	},
 }
 
-initialize_pointer :: proc(state: ^state_t) -> Errno {
-	state.wl_pointer = wl_seat.get_pointer(&state.wl_seat) or_return
+initialize_pointer :: proc(client: ^Client) -> Errno {
+	client.wl_pointer = wl_seat.get_pointer(&client.wl_seat) or_return
 	register_event_handler(
-		state,
-		state.wl_pointer.id,
+		client,
+		client.wl_pointer.id,
 		&wl_pointer_handlers,
 		wl_pointer.handle_event,
 	)

@@ -1,10 +1,9 @@
-package Main
+package wayland
 
-import constants "./constants"
+import wl_shm "../../wayland_protocol/wl_shm"
+import wl_shm_pool "../../wayland_protocol/wl_shm_pool"
 import "core:fmt"
 import "core:sys/linux"
-import wl_shm "wayland_protocol/wl_shm"
-import wl_shm_pool "wayland_protocol/wl_shm_pool"
 
 ShmPool :: struct {
 	wl_shm_pool: wl_shm_pool.t,
@@ -15,9 +14,9 @@ ShmPool :: struct {
 
 wl_shm_handlers: wl_shm.EventHandlers
 
-initialize_wl_shm :: proc(state: ^state_t, name: u32, version: u32) -> Errno {
-	state.wl_shm = wl_shm.from_global(&state.wl_registry, name, version) or_return
-	register_event_handler(state, state.wl_shm.id, &wl_shm_handlers, wl_shm.handle_event)
+initialize_wl_shm :: proc(client: ^Client, name: u32, version: u32) -> Errno {
+	client.wl_shm = wl_shm.from_global(&client.wl_registry, name, version) or_return
+	register_event_handler(client, client.wl_shm.id, &wl_shm_handlers, wl_shm.handle_event)
 	return nil
 }
 
@@ -53,8 +52,6 @@ create_shared_memory_file :: proc(size: u32) -> (linux.Fd, ^u8, Errno) {
 		return -1, nil, ftruncate_err
 	}
 
-	// this needs to be mmunmaped and closed if the screen is resized and this
-	// function is used to create a new memory file
 	data, mmap_err := linux.mmap(uintptr(0), uint(size), {.READ, .WRITE}, {.SHARED}, fd)
 	if mmap_err != nil {
 		fmt.eprintln("mmap failed")

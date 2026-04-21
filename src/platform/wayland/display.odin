@@ -1,10 +1,10 @@
-package Main
+package wayland
 
+import wl_display "../../wayland_protocol/wl_display"
 import "core:fmt"
 import "core:mem"
 import "core:os"
 import "core:sys/linux"
-import wl_display "wayland_protocol/wl_display"
 
 wl_display_handlers := wl_display.EventHandlers {
 	on_error = proc(_: u32, object_id: u32, code: u32, message: string, user_data: rawptr) {
@@ -20,21 +20,15 @@ wl_display_handlers := wl_display.EventHandlers {
 			code,
 			message,
 		)
-		// wl_display errors are unrecoverable per the Wayland spec
-		state := (^state_t)(user_data)
-		state.last_err = .EPROTO
+		client := (^Client)(user_data)
+		client.last_err = .EPROTO
 	},
 }
 
-initialize_display :: proc(state: ^state_t) -> Errno {
+initialize_display :: proc(client: ^Client) -> Errno {
 	socket_fd := wayland_display_connect() or_return
-	state.wl_display = wl_display.init(socket_fd)
-	register_event_handler(
-		state,
-		1, // wl_display always has object id 1
-		&wl_display_handlers,
-		wl_display.handle_event,
-	)
+	client.wl_display = wl_display.init(socket_fd)
+	register_event_handler(client, 1, &wl_display_handlers, wl_display.handle_event)
 	return nil
 }
 
