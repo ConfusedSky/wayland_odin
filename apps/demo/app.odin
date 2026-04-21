@@ -1,9 +1,9 @@
-package app
+package demo
 
-import constants "../constants"
-import platform "../platform"
-import renderer "../renderer"
-import runtime_log "../runtime_log"
+import constants "../../src/constants"
+import platform "../../src/platform"
+import renderer "../../src/renderer"
+import runtime_log "../../src/runtime_log"
 import "core:fmt"
 import "core:math"
 import "core:sys/linux"
@@ -31,6 +31,10 @@ initialize :: proc(
 ) -> linux.Errno {
 	state.logger = logger
 	renderer.initialize_vulkan(&state.vulkan, logger) or_return
+	renderer.initialize_grid_pipeline(&state.vulkan) or_return
+	renderer.initialize_vulkan_commands(&state.vulkan) or_return
+	renderer.initialize_shape_renderer(&state.vulkan) or_return
+	renderer.initialize_text_renderer(&state.vulkan) or_return
 
 	font, font_err := renderer.load_font(&state.vulkan)
 	if font_err != nil do return font_err
@@ -403,4 +407,35 @@ translate_shape :: proc(shape: ^renderer.ShapeData, delta: [2]f32) {
 		circle.center += delta
 		shape.data = circle
 	}
+}
+
+// Runner callbacks — adapt package-internal procs to runner.AppConfig signatures.
+
+on_init :: proc(
+	user_data: rawptr,
+	logger: ^runtime_log.Logger,
+	max_width: u32,
+	max_height: u32,
+) -> linux.Errno {
+	return initialize((^State)(user_data), logger, max_width, max_height)
+}
+
+on_frame :: proc(
+	user_data: rawptr,
+	info: platform.FrameInfo,
+) -> (
+	frame_buf: ^renderer.VulkanFrameBuffer,
+	err: linux.Errno,
+) {
+	state := (^State)(user_data)
+	rendered: bool
+	rendered, err = render_frame(state, info)
+	if err != nil || !rendered {
+		return nil, err
+	}
+	return &state.frame_buf, nil
+}
+
+on_shutdown :: proc(user_data: rawptr) {
+	shutdown((^State)(user_data))
 }
