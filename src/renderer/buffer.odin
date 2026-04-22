@@ -33,8 +33,15 @@ allocate_vulkan_buffer :: proc(
 	mem_props: vk.PhysicalDeviceMemoryProperties
 	vk.GetPhysicalDeviceMemoryProperties(vk_state.physical_device, &mem_props)
 
+	linear_modifier := DRM_FORMAT_MOD_LINEAR
+	modifier_list_info := vk.ImageDrmFormatModifierListCreateInfoEXT {
+		sType                  = .IMAGE_DRM_FORMAT_MODIFIER_LIST_CREATE_INFO_EXT,
+		drmFormatModifierCount = 1,
+		pDrmFormatModifiers    = &linear_modifier,
+	}
 	ext_mem_image_info := vk.ExternalMemoryImageCreateInfo {
 		sType       = .EXTERNAL_MEMORY_IMAGE_CREATE_INFO,
+		pNext       = &modifier_list_info,
 		handleTypes = {.DMA_BUF_EXT},
 	}
 	linear_image_info := vk.ImageCreateInfo {
@@ -46,7 +53,7 @@ allocate_vulkan_buffer :: proc(
 		mipLevels = 1,
 		arrayLayers = 1,
 		samples = {._1},
-		tiling = .LINEAR,
+		tiling = .DRM_FORMAT_MODIFIER_EXT,
 		usage = {.TRANSFER_DST},
 		sharingMode = .EXCLUSIVE,
 		initialLayout = .UNDEFINED,
@@ -67,8 +74,13 @@ allocate_vulkan_buffer :: proc(
 		{.HOST_VISIBLE},
 	) or_return
 
+	dedicated_alloc_info := vk.MemoryDedicatedAllocateInfo {
+		sType = .MEMORY_DEDICATED_ALLOCATE_INFO,
+		image = buf.image,
+	}
 	export_alloc_info := vk.ExportMemoryAllocateInfo {
 		sType       = .EXPORT_MEMORY_ALLOCATE_INFO,
+		pNext       = &dedicated_alloc_info,
 		handleTypes = {.DMA_BUF_EXT},
 	}
 	linear_alloc_info := vk.MemoryAllocateInfo {
@@ -103,7 +115,7 @@ allocate_vulkan_buffer :: proc(
 	defer if err != nil do linux.close(buf.dma_fd)
 
 	subresource := vk.ImageSubresource {
-		aspectMask = {.COLOR},
+		aspectMask = {.MEMORY_PLANE_0_EXT},
 		mipLevel   = 0,
 		arrayLayer = 0,
 	}
