@@ -270,6 +270,14 @@ layout_hello_world_background :: proc(object: ^SceneObject, state: ^State, _: pl
 	}
 }
 
+renderable_zindex :: proc(renderable: renderer.Renderable) -> f32 {
+	#partial switch value in renderable {
+	case renderer.ShapeData:
+		return value.transform.zindex
+	}
+	return 0
+}
+
 add_scene_object :: proc(
 	state: ^State,
 	renderable: renderer.Renderable,
@@ -283,7 +291,18 @@ add_scene_object :: proc(
 		movable     = movable,
 		bounds      = renderer.get_bounding_box(renderable),
 	}
-	append(&state.objects, object)
+	zindex := renderable_zindex(renderable)
+	lo, hi := 0, len(state.objects)
+	for lo < hi {
+		mid := (lo + hi) / 2
+		if renderable_zindex(state.objects[mid].renderable) <= zindex {
+			lo = mid + 1
+		} else {
+			hi = mid
+		}
+	}
+	insert_idx := lo
+	inject_at(&state.objects, insert_idx, object)
 	state.next_id += 1
 }
 
