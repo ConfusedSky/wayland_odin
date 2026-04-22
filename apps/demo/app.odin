@@ -328,7 +328,8 @@ hit_test :: proc(state: ^State, point: [2]f32) -> (int, bool) {
 	for i := len(state.objects) - 1; i >= 0; i -= 1 {
 		object := state.objects[i]
 		if !object.movable do continue
-		if point_in_rect(point, object.bounds) {
+		if point_in_rect(point, object.bounds) &&
+		   renderer.point_in_renderable(point, object.renderable) {
 			return i, true
 		}
 	}

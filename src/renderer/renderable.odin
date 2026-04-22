@@ -38,3 +38,13 @@ get_bounding_box :: proc(renderable: Renderable) -> Rect {
 	}
 	panic("unreachable")
 }
+
+point_in_renderable :: proc(point: [2]f32, renderable: Renderable) -> bool {
+	switch value in renderable {
+	case ShapeData:
+		return point_in_shape(point, value)
+	case TextData:
+		return true
+	}
+	return false
+}
