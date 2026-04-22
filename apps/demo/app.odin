@@ -1,12 +1,13 @@
 package demo
 
-import constants "../../src/constants"
-import platform "../../src/platform"
-import renderer "../../src/renderer"
-import runtime_log "../../src/runtime_log"
 import "core:fmt"
 import "core:math"
 import "core:sys/linux"
+
+import "src:constants"
+import "src:platform"
+import "src:renderer"
+import "src:runtime_log"
 
 log_blacklist: []string : {
 	"app.frame.draw",

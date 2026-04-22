@@ -1,8 +1,8 @@
 package demo
 
-import runner "../../src/runner"
 import "core:fmt"
 import "core:os"
+import "src:runner"
 
 main :: proc() {
 	state: State

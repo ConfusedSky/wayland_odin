@@ -1,8 +1,8 @@
 package demo
 
-import platform "../../src/platform"
-import renderer "../../src/renderer"
-import runtime_log "../../src/runtime_log"
+import "src:platform"
+import "src:renderer"
+import "src:runtime_log"
 
 LayoutProc :: proc(object: ^SceneObject, state: ^State, info: platform.FrameInfo)
 
