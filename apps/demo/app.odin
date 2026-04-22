@@ -178,6 +178,7 @@ initialize_scene :: proc(state: ^State) {
 		state,
 		renderer.ShapeData {
 			data = renderer.TriangleData{p0 = {510, 110}, p1 = {590, 260}, p2 = {430, 260}},
+			transform = {angle = math.PI / 4},
 			style = {fill_color = {1, 0.4, 0, 1}, border_color = {1, 1, 1, 1}, border_width = 4},
 		},
 		true,
@@ -195,6 +196,7 @@ initialize_scene :: proc(state: ^State) {
 		renderer.ShapeData {
 			data = renderer.OvalData{center = {210, 530}, radii = {90, 40}},
 			style = {fill_color = {1, 0.2, 0.5, 1}, border_color = {1, 1, 1, 1}, border_width = 4},
+			transform = {angle = math.PI / 4},
 		},
 		true,
 	)

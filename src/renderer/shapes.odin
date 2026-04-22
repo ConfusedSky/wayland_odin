@@ -349,21 +349,11 @@ get_shape_bounding_quad :: proc(shape: ShapeData) -> Rect {
 }
 
 @(private)
-dot2 :: proc(a, b: [2]f32) -> f32 {
-	return a.x * b.x + a.y * b.y
-}
-
-@(private)
 rotate_point :: proc(point: [2]f32, pivot: [2]f32, angle: f32) -> [2]f32 {
 	c := math.cos_f32(angle)
 	s := math.sin_f32(angle)
 	d := point - pivot
 	return pivot + [2]f32{d.x * c - d.y * s, d.x * s + d.y * c}
-}
-
-@(private)
-cross2 :: proc(a, b: [2]f32) -> f32 {
-	return a.x * b.y - a.y * b.x
 }
 
 @(private)
@@ -377,15 +367,13 @@ point_in_shape :: proc(point: [2]f32, shape: ShapeData) -> bool {
 
 	switch data in shape.data {
 	case CircleData:
-		cx := point.x - data.center.x
-		cy := point.y - data.center.y
-		return cx * cx + cy * cy <= data.radius * data.radius
+		dist := point - data.center
+		return linalg.dot(dist, dist) <= data.radius * data.radius
 
 	case OvalData:
 		local := unrotate(point, data.center, angle)
-		dx := (local.x - data.center.x) / data.radii.x
-		dy := (local.y - data.center.y) / data.radii.y
-		return dx * dx + dy * dy <= 1.0
+		dist := (local - data.center) / data.radii
+		return linalg.dot(dist, dist) <= 1.0
 
 	case RectData:
 		center := data.pos + data.size * 0.5
@@ -410,9 +398,9 @@ point_in_shape :: proc(point: [2]f32, shape: ShapeData) -> bool {
 	case TriangleData:
 		centroid := (data.p0 + data.p1 + data.p2) / 3.0
 		local := unrotate(point, centroid, angle)
-		d1 := cross2(local - data.p0, data.p1 - data.p0)
-		d2 := cross2(local - data.p1, data.p2 - data.p1)
-		d3 := cross2(local - data.p2, data.p0 - data.p2)
+		d1 := linalg.cross(local - data.p0, data.p1 - data.p0)
+		d2 := linalg.cross(local - data.p1, data.p2 - data.p1)
+		d3 := linalg.cross(local - data.p2, data.p0 - data.p2)
 		has_neg := (d1 < 0) || (d2 < 0) || (d3 < 0)
 		has_pos := (d1 > 0) || (d2 > 0) || (d3 > 0)
 		return !(has_neg && has_pos)
@@ -422,17 +410,15 @@ point_in_shape :: proc(point: [2]f32, shape: ShapeData) -> bool {
 		local := unrotate(point, midpoint, angle)
 		half_width := data.width * 0.5
 		seg := data.p1 - data.p0
-		seg_len_sq := dot2(seg, seg)
+		seg_len_sq := linalg.dot(seg, seg)
 		if seg_len_sq == 0 {
-			lx := local.x - data.p0.x
-			ly := local.y - data.p0.y
-			return lx * lx + ly * ly <= half_width * half_width
+			dist := local - data.p0
+			return linalg.dot(dist, dist) <= half_width * half_width
 		}
-		t := clamp(dot2(local - data.p0, seg) / seg_len_sq, f32(0), f32(1))
+		t := clamp(linalg.dot(local - data.p0, seg) / seg_len_sq, f32(0), f32(1))
 		closest := data.p0 + t * seg
-		ex := local.x - closest.x
-		ey := local.y - closest.y
-		return ex * ex + ey * ey <= half_width * half_width
+		dist := local - closest
+		return linalg.dot(dist, dist) <= half_width * half_width
 	}
 	return false
 }
