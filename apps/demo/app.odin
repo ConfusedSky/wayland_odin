@@ -31,10 +31,6 @@ initialize :: proc(
 ) -> linux.Errno {
 	state.logger = logger
 	renderer.initialize_vulkan(&state.vulkan, logger) or_return
-	renderer.initialize_grid_pipeline(&state.vulkan) or_return
-	renderer.initialize_vulkan_commands(&state.vulkan) or_return
-	renderer.initialize_shape_renderer(&state.vulkan) or_return
-	renderer.initialize_text_renderer(&state.vulkan) or_return
 
 	font, font_err := renderer.load_font(&state.vulkan)
 	if font_err != nil do return font_err

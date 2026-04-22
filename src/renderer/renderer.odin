@@ -531,6 +531,10 @@ cleanup_vulkan :: proc(state: ^VulkanState) {
 			vk.DestroyFence(state.device, state.render_fence, nil)
 			state.render_fence = 0
 		}
+		if state.command_buffer != nil {
+			vk.FreeCommandBuffers(state.device, state.command_pool, 1, &state.command_buffer)
+			state.command_buffer = nil
+		}
 		if state.command_pool != 0 {
 			vk.DestroyCommandPool(state.device, state.command_pool, nil)
 			state.command_pool = 0
