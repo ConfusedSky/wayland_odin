@@ -17,9 +17,9 @@ draw :: proc(state: ^VulkanState, renderable: Renderable) {
 	case TextData:
 		switch value.anchor {
 		case .Baseline:
-			draw_text(state, value.text, value.pos, value.style)
+			draw_text(state, value.text, value.pos, value.style, value.zindex)
 		case .TopLeft:
-			draw_text_top_left(state, value.text, value.pos, value.style)
+			draw_text_top_left(state, value.text, value.pos, value.style, value.zindex)
 		}
 	}
 }

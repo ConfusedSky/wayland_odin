@@ -5,6 +5,7 @@ import "core:fmt"
 import "core:math"
 import "core:mem"
 import "core:os"
+import "core:slice"
 import "core:sys/linux"
 import stbtt "vendor:stb/truetype"
 import vk "vendor:vulkan"
@@ -46,6 +47,7 @@ TextData :: struct {
 	pos:    [2]f32,
 	style:  TextStyle,
 	anchor: TextAnchor,
+	zindex: f32,
 }
 
 TextStyle :: struct {
@@ -60,9 +62,10 @@ TextVertex :: struct #packed {
 }
 
 TextDraw :: struct {
-	text:  string,
-	pos:   [2]f32,
-	style: TextStyle,
+	text:   string,
+	pos:    [2]f32,
+	style:  TextStyle,
+	zindex: f32,
 }
 
 TextRenderer :: struct {
@@ -506,17 +509,32 @@ start_text :: proc(state: ^VulkanState) {
 	clear(&state.text_renderer.text_draws)
 }
 
-draw_text_top_left :: proc(state: ^VulkanState, text: string, pos: [2]f32, style: TextStyle) {
-	draw_text(state, text, {pos.x, pos.y + style.font.ascent}, style)
+draw_text_top_left :: proc(
+	state: ^VulkanState,
+	text: string,
+	pos: [2]f32,
+	style: TextStyle,
+	zindex: f32 = 0,
+) {
+	draw_text(state, text, {pos.x, pos.y + style.font.ascent}, style, zindex)
 }
 
-draw_text :: proc(state: ^VulkanState, text: string, pos: [2]f32, style: TextStyle) {
+draw_text :: proc(
+	state: ^VulkanState,
+	text: string,
+	pos: [2]f32,
+	style: TextStyle,
+	zindex: f32 = 0,
+) {
 	assert(
 		len(state.text_renderer.text_draws) == 0 ||
 		state.text_renderer.text_draws[0].style.font == style.font,
 		"all draw_text calls in a frame must use the same font",
 	)
-	append(&state.text_renderer.text_draws, TextDraw{text = text, pos = pos, style = style})
+	append(
+		&state.text_renderer.text_draws,
+		TextDraw{text = text, pos = pos, style = style, zindex = zindex},
+	)
 }
 
 end_text :: proc(
@@ -528,6 +546,9 @@ end_text :: proc(
 	t := &state.text_renderer
 	if len(t.text_draws) == 0 do return nil
 
+	slice.stable_sort_by(t.text_draws[:], proc(a, b: TextDraw) -> bool {
+		return a.zindex < b.zindex
+	})
 	clear(&t.vertices)
 	for draw in t.text_draws {
 		font := draw.style.font

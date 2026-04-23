@@ -271,9 +271,11 @@ layout_hello_world_background :: proc(object: ^SceneObject, state: ^State, _: pl
 }
 
 renderable_zindex :: proc(renderable: renderer.Renderable) -> f32 {
-	#partial switch value in renderable {
+	switch value in renderable {
 	case renderer.ShapeData:
 		return value.transform.zindex
+	case renderer.TextData:
+		return value.zindex
 	}
 	return 0
 }
