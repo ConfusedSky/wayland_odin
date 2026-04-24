@@ -73,6 +73,7 @@ TextDraw :: struct {
 TextRenderer :: struct {
 	atlases:      [dynamic]^Font,
 	text_draws:   [dynamic]TextDraw,
+	font_draws:   map[^Font][dynamic]TextDraw,
 	vertices:     [dynamic]TextVertex,
 	pool:         vk.DescriptorPool,
 	pipeline:     VulkanPipeline(2, TextVertex),
@@ -115,6 +116,7 @@ initialize_text_renderer :: proc(state: ^VulkanState) -> (err: linux.Errno) {
 	t := &state.text_renderer
 	t.atlases = make([dynamic]^Font)
 	t.text_draws = make([dynamic]TextDraw)
+	t.font_draws = make(map[^Font][dynamic]TextDraw)
 	t.vertices = make([dynamic]TextVertex)
 	t.default_size = 16
 
@@ -160,6 +162,10 @@ destroy_text_renderer :: proc(state: ^VulkanState) {
 		destroy_font(state, font)
 	}
 	delete(t.atlases)
+	for _, draws in t.font_draws {
+		delete(draws)
+	}
+	delete(t.font_draws)
 	destroy_pipeline(state, &t.pipeline)
 	if t.pool != 0 {
 		vk.DestroyDescriptorPool(state.device, t.pool, nil)
@@ -569,41 +575,42 @@ upload_font_atlas :: proc(
 // Per-frame API
 // ---------------------------------------------------------------------------
 
-// Ensures all GPU buffers are large enough for the current frame's text draws.
+// Ensures all GPU buffers are large enough for the current frame's text draws
+// and builds the font_draws map used by end_text.
 // Must be called before end_text, outside the command buffer render pass.
 ensure_text :: proc(state: ^VulkanState) -> linux.Errno {
 	t := &state.text_renderer
 	if len(t.text_draws) == 0 do return nil
 
-	FontQuads :: struct {
-		font:  ^Font,
-		quads: u32,
-	}
-	per_font := make([dynamic]FontQuads)
-	defer delete(per_font)
+	slice.stable_sort_by(t.text_draws[:], proc(a, b: TextDraw) -> bool {
+		return a.zindex < b.zindex
+	})
 
 	for draw in t.text_draws {
 		font := acquire_atlas(state, draw.style.size) or_return
 		if font == nil do continue
-		found := false
-		for &fq in per_font {
-			if fq.font == font {
-				fq.quads += u32(len(draw.text))
-				found = true
-				break
-			}
+		if font not_in t.font_draws {
+			t.font_draws[font] = make([dynamic]TextDraw)
 		}
-		if !found do append(&per_font, FontQuads{font, u32(len(draw.text))})
+		append(&t.font_draws[font], draw)
 	}
 
-	for fq in per_font {
-		font_ensure_buffers(state, fq.font, fq.quads) or_return
+	for font, draws in t.font_draws {
+		total_chars: u32
+		for draw in draws {
+			total_chars += u32(len(draw.text))
+		}
+		font_ensure_buffers(state, font, total_chars) or_return
 	}
 	return nil
 }
 
 start_text :: proc(state: ^VulkanState) {
-	clear(&state.text_renderer.text_draws)
+	t := &state.text_renderer
+	clear(&t.text_draws)
+	for _, &draws in t.font_draws {
+		clear(&draws)
+	}
 }
 
 draw_text_top_left :: proc(
@@ -640,47 +647,14 @@ end_text :: proc(
 	surf_h: u32,
 ) -> linux.Errno {
 	t := &state.text_renderer
-	if len(t.text_draws) == 0 do return nil
-
-	slice.stable_sort_by(t.text_draws[:], proc(a, b: TextDraw) -> bool {
-		return a.zindex < b.zindex
-	})
-
-	// Resolve each draw to its best-matching atlas.
-	ResolvedDraw :: struct {
-		draw: TextDraw,
-		font: ^Font,
-	}
-	resolved := make([]ResolvedDraw, len(t.text_draws))
-	defer delete(resolved)
-	for draw, i in t.text_draws {
-		font := acquire_atlas(state, draw.style.size) or_return
-		resolved[i] = ResolvedDraw{draw, font}
-	}
-
-	// Collect unique fonts in first-occurrence order.
-	unique_fonts := make([dynamic]^Font)
-	defer delete(unique_fonts)
-	for r in resolved {
-		if r.font == nil do continue
-		already := false
-		for f in unique_fonts {
-			if f == r.font {
-				already = true
-				break
-			}
-		}
-		if !already do append(&unique_fonts, r.font)
-	}
-	if len(unique_fonts) == 0 do return nil
+	if len(t.font_draws) == 0 do return nil
 
 	push := [2]f32{f32(surf_w), f32(surf_h)}
 
-	for font in unique_fonts {
+	for font, draws in t.font_draws {
+		if len(draws) == 0 do continue
 		clear(&t.vertices)
-		for r in resolved {
-			if r.font != font do continue
-			draw := r.draw
+		for draw in draws {
 			scale: f32 = 1
 			if draw.style.size != 0 do scale = draw.style.size / font.pixel_size
 			pen_x := draw.pos.x
