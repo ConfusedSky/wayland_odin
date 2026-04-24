@@ -97,6 +97,8 @@ ShapeRenderer :: struct {
 	shape_data: [dynamic]ShapeData, // one entry per submitted shape, sorted before upload
 	vertices:   [dynamic]ShapeVertex, // per-frame scratch: sorted shapes expanded to 4 verts each
 	pipeline:   VulkanPipeline(2, ShapeVertex),
+	vertex_buf: VulkanBuffer(.VERTEX_BUFFER, ShapeVertex),
+	index_buf:  QuadIndexBuffer,
 }
 
 // ---------------------------------------------------------------------------
@@ -119,6 +121,8 @@ initialize_shape_renderer :: proc(state: ^VulkanState) -> linux.Errno {
 
 destroy_shape_renderer :: proc(state: ^VulkanState) {
 	s := &state.shape_renderer
+	destroy_buffer(state, &s.vertex_buf)
+	destroy_buffer(state, &s.index_buf)
 	destroy_pipeline(state, &s.pipeline)
 	delete(s.shape_data)
 	delete(s.vertices)
@@ -163,10 +167,15 @@ end_shapes :: proc(
 		expand_shape(sh, &shapes.vertices)
 	}
 
-	update_pipeline_verticies(state, &shapes.pipeline, shapes.vertices[:])
+	n_quads := u32(len(shapes.vertices) / 4)
+	set_buffer_data(state, &shapes.vertex_buf, shapes.vertices[:])
+	ensure_quad_index_buffer(state, &shapes.index_buf, vk.DeviceSize(n_quads)) or_return
 
 	push := [2]f32{f32(surf_w), f32(surf_h)}
-	apply_pipeline(cmd, &shapes.pipeline, &push)
+	bind_pipeline(cmd, &shapes.pipeline, &push)
+	bind_vertex_buffer(cmd, &shapes.pipeline, &shapes.vertex_buf)
+	bind_index_buffer(cmd, &shapes.pipeline, &shapes.index_buf)
+	draw_pipeline(cmd, &shapes.pipeline, n_quads)
 
 	return nil
 }
@@ -428,9 +437,8 @@ initialize_shape_pipeline :: proc(state: ^VulkanState) -> linux.Errno {
 	shapes := &state.shape_renderer
 
 	info := VulkanPipelineInfo {
-		vertex_spv        = #load("shaders/shapes.vert.spv"),
-		fragment_spv      = #load("shaders/shapes.frag.spv"),
-		starting_capacity = 64,
+		vertex_spv   = #load("shaders/shapes.vert.spv"),
+		fragment_spv = #load("shaders/shapes.frag.spv"),
 	}
 	initialize_rendering_pipeline(state, &shapes.pipeline, &info) or_return
 

@@ -2,7 +2,6 @@ package renderer
 
 import "base:runtime"
 import "core:fmt"
-import "core:mem"
 import "core:sys/linux"
 import vk "vendor:vulkan"
 
@@ -11,7 +10,6 @@ NoVertex :: struct {}
 VulkanPipelineInfo :: struct {
 	fragment_spv:        []u8,
 	vertex_spv:          []u8,
-	starting_capacity:   vk.DeviceSize,
 	descriptor_bindings: []vk.DescriptorSetLayoutBinding, // nil = no descriptor set
 }
 
@@ -21,13 +19,7 @@ VulkanPipeline :: struct($PushConstantCount: u32, $VertexType: typeid) {
 	descriptor_set_layout: vk.DescriptorSetLayout, // 0 if unused
 	layout:                vk.PipelineLayout,
 	vk_pipeline:           vk.Pipeline,
-	n_quads:               u32,
-	index_buffer:          vk.Buffer,
-	index_memory:          vk.DeviceMemory,
-	vertex_buffer:         vk.Buffer,
-	vertex_memory:         vk.DeviceMemory,
-	vertex_capacity:       vk.DeviceSize,
-	vertex_data:           rawptr,
+	bound:                 bool,
 }
 
 initialize_rendering_pipeline :: proc(
@@ -196,19 +188,16 @@ initialize_rendering_pipeline :: proc(
 		return .EINVAL
 	}
 
-	if info.starting_capacity > 0 {
-		allocate_pipeline_buffers(state, pipeline, info.starting_capacity) or_return
-	}
-
 	return nil
 }
 
-apply_pipeline :: proc(
+bind_pipeline :: proc(
 	command_buffer: vk.CommandBuffer,
 	pipeline: ^VulkanPipeline($C, $V),
 	push_data: ^[C]f32,
 	descriptor_set: ^vk.DescriptorSet = nil,
 ) {
+	pipeline.bound = true
 	vk.CmdBindPipeline(command_buffer, .GRAPHICS, pipeline.vk_pipeline)
 
 	vk.CmdPushConstants(
@@ -232,39 +221,48 @@ apply_pipeline :: proc(
 			nil,
 		)
 	}
+}
+
+bind_vertex_buffer :: proc(
+	command_buffer: vk.CommandBuffer,
+	pipeline: ^VulkanPipeline($PushConstantCount, $VertexType),
+	buffer: ^VulkanBuffer(.VERTEX_BUFFER, VertexType),
+) {
+	assert(pipeline.bound)
+	offset: vk.DeviceSize = 0
+	vk.CmdBindVertexBuffers(command_buffer, 0, 1, &buffer.buffer, &offset)
+}
+
+bind_index_buffer :: proc(
+	command_buffer: vk.CommandBuffer,
+	pipeline: ^VulkanPipeline($PushConstantCount, $VertexType),
+	buffer: ^VulkanBuffer(.INDEX_BUFFER, $IndexType),
+) {
+	assert(pipeline.bound)
+	when IndexType == u16 {
+		vk.CmdBindIndexBuffer(command_buffer, buffer.buffer, 0, .UINT16)
+	} else when IndexType == u32 {
+		vk.CmdBindIndexBuffer(command_buffer, buffer.buffer, 0, .UINT32)
+	} else {
+		#panic("bind_index_buffer: unsupported index type")
+	}
+}
+
+draw_pipeline :: proc(
+	command_buffer: vk.CommandBuffer,
+	pipeline: ^VulkanPipeline($C, $V),
+	n_quads: u32,
+) {
+	assert(pipeline.bound)
 
 	when V == NoVertex {
 		// Full-screen triangle — no vertex buffer
 		vk.CmdDraw(command_buffer, 3, 1, 0, 0)
 	} else {
-		offset: vk.DeviceSize = 0
-		vk.CmdBindVertexBuffers(command_buffer, 0, 1, &pipeline.vertex_buffer, &offset)
-		vk.CmdBindIndexBuffer(command_buffer, pipeline.index_buffer, 0, .UINT16)
-
-		vk.CmdDrawIndexed(command_buffer, u32(pipeline.n_quads * 6), 1, 0, 0, 0)
+		vk.CmdDrawIndexed(command_buffer, n_quads * 6, 1, 0, 0, 0)
 	}
 
-}
-
-update_pipeline_verticies :: proc(
-	state: ^VulkanState,
-	pipeline: ^VulkanPipeline($C, $V),
-	verticies: []V,
-) -> linux.Errno {
-	n_verticies := vk.DeviceSize(len(verticies))
-	if n_verticies > pipeline.vertex_capacity {
-		destroy_pipeline_buffers(state, pipeline)
-		new_cap := max(n_verticies * 2, vk.DeviceSize(64))
-		new_cap = (new_cap + 3) / 4 * 4
-		allocate_pipeline_buffers(state, pipeline, new_cap) or_return
-	}
-
-	mem.copy(pipeline.vertex_data, raw_data(verticies), len(verticies) * size_of(V))
-	flush_mapped_memory(state.device, pipeline.vertex_memory)
-
-	pipeline.n_quads = u32(len(verticies) / 4)
-
-	return nil
+	pipeline.bound = false
 }
 
 get_vertex_attribute_descriptions :: proc(
@@ -317,167 +315,6 @@ f32_format_for :: proc(ti: ^runtime.Type_Info, name: string) -> vk.Format {
 	fmt.panicf("vertex attr: unsupported type for field %q: %v", name, ti)
 }
 
-@(private = "file")
-flush_mapped_memory :: proc(device: vk.Device, memory: vk.DeviceMemory) {
-	r := vk.MappedMemoryRange {
-		sType  = .MAPPED_MEMORY_RANGE,
-		memory = memory,
-		offset = 0,
-		size   = vk.DeviceSize(vk.WHOLE_SIZE),
-	}
-	vk.FlushMappedMemoryRanges(device, 1, &r)
-}
-
-@(private = "file")
-allocate_pipeline_buffers :: proc(
-	state: ^VulkanState,
-	pipeline: ^VulkanPipeline($C, $VertexType),
-	vertex_capacity: vk.DeviceSize,
-) -> (
-	err: linux.Errno,
-) {
-	assert(vertex_capacity % 4 == 0)
-
-	defer if err != nil do destroy_pipeline_buffers(state, pipeline)
-
-	allocate_pipeline_buffer(
-		state,
-		&pipeline.vertex_buffer,
-		&pipeline.vertex_memory,
-		{.VERTEX_BUFFER},
-		&state.mem_props,
-		vertex_capacity * size_of(VertexType),
-	) or_return
-	allocate_pipeline_buffer(
-		state,
-		&pipeline.index_buffer,
-		&pipeline.index_memory,
-		{.INDEX_BUFFER},
-		&state.mem_props,
-		vertex_capacity / 4 * 6 * size_of(u16),
-	) or_return
-
-	if res := vk.MapMemory(
-		state.device,
-		pipeline.vertex_memory,
-		0,
-		vk.DeviceSize(vk.WHOLE_SIZE),
-		{},
-		&pipeline.vertex_data,
-	); res != .SUCCESS {
-		fmt.eprintln("shapes: vkMapMemory failed:", res)
-		return .EINVAL
-	}
-
-	n_quads := vertex_capacity / 4
-	indices := make([]u16, n_quads * 6)
-	defer delete(indices)
-
-	for q in 0 ..< n_quads {
-		base := q * 4
-		i := q * 6
-		indices[i + 0] = u16(base + 0)
-		indices[i + 1] = u16(base + 1)
-		indices[i + 2] = u16(base + 2)
-		indices[i + 3] = u16(base + 2)
-		indices[i + 4] = u16(base + 1)
-		indices[i + 5] = u16(base + 3)
-	}
-	index_size := vk.DeviceSize(len(indices) * size_of(u16))
-
-	idx_mapped: rawptr
-	vk.MapMemory(
-		state.device,
-		pipeline.index_memory,
-		0,
-		vk.DeviceSize(vk.WHOLE_SIZE),
-		{},
-		&idx_mapped,
-	)
-	mem.copy(idx_mapped, &indices[0], int(index_size))
-	flush_mapped_memory(state.device, pipeline.index_memory)
-	vk.UnmapMemory(state.device, pipeline.index_memory)
-
-	pipeline.vertex_capacity = vertex_capacity
-	return nil
-}
-
-@(private = "file")
-allocate_pipeline_buffer :: proc(
-	state: ^VulkanState,
-	buffer: ^vk.Buffer,
-	memory: ^vk.DeviceMemory,
-	buffer_usage: vk.BufferUsageFlags,
-	mem_props: ^vk.PhysicalDeviceMemoryProperties,
-	capacity: vk.DeviceSize,
-) -> (
-	err: linux.Errno,
-) {
-	buf_info := vk.BufferCreateInfo {
-		sType       = .BUFFER_CREATE_INFO,
-		size        = capacity,
-		usage       = buffer_usage,
-		sharingMode = .EXCLUSIVE,
-	}
-	if res := vk.CreateBuffer(state.device, &buf_info, nil, buffer); res != .SUCCESS {
-		fmt.eprintln("shapes: vkCreateBuffer (vertex) failed:", res)
-		return .EINVAL
-	}
-	defer if err != nil {
-		vk.DestroyBuffer(state.device, buffer^, nil)
-		buffer^ = 0
-	}
-
-	mem_reqs: vk.MemoryRequirements
-	vk.GetBufferMemoryRequirements(state.device, buffer^, &mem_reqs)
-
-	mem_type := find_memory_type(
-		mem_props^,
-		mem_reqs.memoryTypeBits,
-		{.HOST_VISIBLE, .HOST_COHERENT},
-		vk.MemoryPropertyFlags{.HOST_VISIBLE},
-	) or_return
-
-	alloc_info := vk.MemoryAllocateInfo {
-		sType           = .MEMORY_ALLOCATE_INFO,
-		allocationSize  = mem_reqs.size,
-		memoryTypeIndex = mem_type,
-	}
-	if res := vk.AllocateMemory(state.device, &alloc_info, nil, memory); res != .SUCCESS {
-		fmt.eprintln("shapes: vkAllocateMemory (vertex) failed:", res)
-		return .ENOMEM
-	}
-	defer if err != nil {
-		vk.FreeMemory(state.device, memory^, nil)
-		memory^ = 0
-	}
-
-	vk.BindBufferMemory(state.device, buffer^, memory^, 0)
-
-	return nil
-}
-
-@(private = "file")
-destroy_pipeline_buffers :: proc(state: ^VulkanState, pipeline: ^VulkanPipeline($C, $V)) {
-	if pipeline.vertex_buffer != 0 {
-		if pipeline.vertex_data != nil {
-			vk.UnmapMemory(state.device, pipeline.vertex_memory)
-			pipeline.vertex_data = nil
-		}
-		vk.DestroyBuffer(state.device, pipeline.vertex_buffer, nil)
-		vk.FreeMemory(state.device, pipeline.vertex_memory, nil)
-		pipeline.vertex_buffer = 0
-		pipeline.vertex_memory = 0
-	}
-	if pipeline.index_buffer != 0 {
-		vk.DestroyBuffer(state.device, pipeline.index_buffer, nil)
-		vk.FreeMemory(state.device, pipeline.index_memory, nil)
-		pipeline.index_buffer = 0
-		pipeline.index_memory = 0
-	}
-	pipeline.vertex_capacity = 0
-}
-
 destroy_pipeline :: proc(state: ^VulkanState, pipeline: ^VulkanPipeline($C, $V)) {
 	if pipeline.vk_pipeline != 0 {
 		vk.DestroyPipeline(state.device, pipeline.vk_pipeline, nil)
@@ -499,5 +336,4 @@ destroy_pipeline :: proc(state: ^VulkanState, pipeline: ^VulkanPipeline($C, $V))
 		vk.DestroyShaderModule(state.device, pipeline.vertex_shader, nil)
 		pipeline.vertex_shader = 0
 	}
-	destroy_pipeline_buffers(state, pipeline)
 }

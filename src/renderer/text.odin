@@ -36,7 +36,6 @@ Font :: struct {
 	atlas_view:       vk.ImageView,
 	atlas_sampler:    vk.Sampler,
 	descriptor_set:   vk.DescriptorSet,
-	n_quads:          u32,
 	vertex_buf:       VulkanBuffer(.VERTEX_BUFFER, TextVertex),
 	index_buf:        QuadIndexBuffer,
 }
@@ -143,11 +142,9 @@ initialize_text_renderer :: proc(state: ^VulkanState) -> (err: linux.Errno) {
 			stageFlags = {.FRAGMENT},
 		},
 	}
-	// starting_capacity = 0: no pipeline-level vertex buffer; each Font owns its own.
 	info := VulkanPipelineInfo {
 		vertex_spv          = #load("shaders/text.vert.spv"),
 		fragment_spv        = #load("shaders/text.frag.spv"),
-		starting_capacity   = 0,
 		descriptor_bindings = descriptor_bindings,
 	}
 	initialize_rendering_pipeline(state, &t.pipeline, &info) or_return
@@ -355,7 +352,6 @@ font_ensure_buffers :: proc(state: ^VulkanState, font: ^Font, needed_quads: u32)
 font_destroy_buffers :: proc(state: ^VulkanState, font: ^Font) {
 	destroy_buffer(state, &font.vertex_buf)
 	destroy_buffer(state, &font.index_buf)
-	font.n_quads = 0
 }
 
 // ---------------------------------------------------------------------------
@@ -648,8 +644,6 @@ end_text :: proc(
 	if len(unique_fonts) == 0 do return nil
 
 	push := [2]f32{f32(surf_w), f32(surf_h)}
-	vk.CmdBindPipeline(cmd, .GRAPHICS, t.pipeline.vk_pipeline)
-	vk.CmdPushConstants(cmd, t.pipeline.layout, {.VERTEX, .FRAGMENT}, 0, size_of(push), &push)
 
 	for font in unique_fonts {
 		clear(&t.vertices)
@@ -692,24 +686,12 @@ end_text :: proc(
 
 		n_quads := u32(len(t.vertices) / 4)
 		font_ensure_buffers(state, font, n_quads) or_return
-
 		set_buffer_data(state, &font.vertex_buf, t.vertices[:])
-		font.n_quads = n_quads
 
-		vk.CmdBindDescriptorSets(
-			cmd,
-			.GRAPHICS,
-			t.pipeline.layout,
-			0,
-			1,
-			&font.descriptor_set,
-			0,
-			nil,
-		)
-		offset: vk.DeviceSize = 0
-		vk.CmdBindVertexBuffers(cmd, 0, 1, &font.vertex_buf.buffer, &offset)
-		vk.CmdBindIndexBuffer(cmd, font.index_buf.buffer, 0, .UINT16)
-		vk.CmdDrawIndexed(cmd, font.n_quads * 6, 1, 0, 0, 0)
+		bind_pipeline(cmd, &t.pipeline, &push, &font.descriptor_set)
+		bind_vertex_buffer(cmd, &t.pipeline, &font.vertex_buf)
+		bind_index_buffer(cmd, &t.pipeline, &font.index_buf)
+		draw_pipeline(cmd, &t.pipeline, n_quads)
 	}
 
 	return nil

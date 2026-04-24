@@ -415,7 +415,8 @@ draw_grid :: proc(state: ^VulkanState) {
 		state.frame_params.pointer_y,
 		f32(NUM_CELLS),
 	}
-	apply_pipeline(state.command_buffer, &state.grid_pipeline, &push_data)
+	bind_pipeline(state.command_buffer, &state.grid_pipeline, &push_data)
+	draw_pipeline(state.command_buffer, &state.grid_pipeline, 0)
 }
 
 end_frame :: proc(state: ^VulkanState) -> linux.Errno {
