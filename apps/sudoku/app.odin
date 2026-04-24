@@ -44,9 +44,7 @@ initialize :: proc(
 	state.logger = logger
 	renderer.initialize_vulkan(&state.vulkan, logger) or_return
 
-	font, font_err := renderer.load_font(&state.vulkan, 48)
-	if font_err != nil do return font_err
-	state.font = font
+	renderer.acquire_atlas(&state.vulkan, 48) or_return
 
 	frame_buf, err := renderer.allocate_vulkan_buffer(&state.vulkan, max_width, max_height)
 	if err != nil do return err
@@ -60,10 +58,6 @@ initialize :: proc(
 }
 
 shutdown :: proc(state: ^State) {
-	if state.font != nil {
-		renderer.destroy_font(&state.vulkan, state.font)
-		state.font = nil
-	}
 	if state.frame_buf.memory != 0 {
 		renderer.free_vulkan_buffer(&state.vulkan, &state.frame_buf)
 	}
@@ -181,7 +175,6 @@ draw_grid :: proc(state: ^State, info: platform.FrameInfo) {
 
 	cell_size := grid_size / 9
 	digit_style := renderer.TextStyle {
-		font  = state.font,
 		color = BLACK,
 		size  = cell_size * 0.65,
 	}
@@ -193,7 +186,12 @@ draw_grid :: proc(state: ^State, info: platform.FrameInfo) {
 				grid_x + (f32(col) + 0.5) * cell_size,
 				grid_y + (f32(row) + 0.5) * cell_size,
 			}
-			bbox := renderer.get_text_bounding_box_top_left(digit_str, {0, 0}, digit_style)
+			bbox := renderer.get_text_bounding_box_top_left(
+				&state.vulkan,
+				digit_str,
+				{0, 0},
+				digit_style,
+			)
 			pos := [2]f32{cell_center.x - bbox.size.x / 2, cell_center.y - bbox.size.y / 2}
 			renderer.draw_text_top_left(&state.vulkan, digit_str, pos, digit_style)
 		}

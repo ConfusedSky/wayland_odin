@@ -24,16 +24,16 @@ draw :: proc(state: ^VulkanState, renderable: Renderable) {
 	}
 }
 
-get_bounding_box :: proc(renderable: Renderable) -> Rect {
+get_bounding_box :: proc(state: ^VulkanState, renderable: Renderable) -> Rect {
 	switch value in renderable {
 	case ShapeData:
 		return get_shape_bounding_box(value)
 	case TextData:
 		switch value.anchor {
 		case .Baseline:
-			return get_text_bounding_box(value.text, value.pos, value.style)
+			return get_text_bounding_box(state, value.text, value.pos, value.style)
 		case .TopLeft:
-			return get_text_bounding_box_top_left(value.text, value.pos, value.style)
+			return get_text_bounding_box_top_left(state, value.text, value.pos, value.style)
 		}
 	}
 	panic("unreachable")

@@ -13,6 +13,7 @@ import vk "vendor:vulkan"
 FONT_PATH :: "/usr/share/fonts/Adwaita/AdwaitaSans-Regular.ttf"
 FONT_OVERSAMPLE_H :: u32(4)
 FONT_OVERSAMPLE_V :: u32(4)
+ATLAS_SIZE_TOLERANCE :: f32(5)
 
 GLYPH_FIRST :: 32
 GLYPH_COUNT :: 96
@@ -35,11 +36,23 @@ Font :: struct {
 	atlas_view:       vk.ImageView,
 	atlas_sampler:    vk.Sampler,
 	descriptor_set:   vk.DescriptorSet,
+	n_quads:          u32,
+	vertex_buf:       vk.Buffer,
+	vertex_mem:       vk.DeviceMemory,
+	vertex_data:      rawptr,
+	vertex_capacity:  vk.DeviceSize,
+	index_buf:        vk.Buffer,
+	index_mem:        vk.DeviceMemory,
 }
 
 TextAnchor :: enum int {
 	Baseline,
 	TopLeft,
+}
+
+TextStyle :: struct {
+	color: [4]f32,
+	size:  f32,
 }
 
 TextData :: struct {
@@ -48,12 +61,6 @@ TextData :: struct {
 	style:  TextStyle,
 	anchor: TextAnchor,
 	zindex: f32,
-}
-
-TextStyle :: struct {
-	font:  ^Font,
-	color: [4]f32,
-	size:  f32,
 }
 
 TextVertex :: struct #packed {
@@ -70,6 +77,7 @@ TextDraw :: struct {
 }
 
 TextRenderer :: struct {
+	atlases:    [dynamic]^Font,
 	text_draws: [dynamic]TextDraw,
 	vertices:   [dynamic]TextVertex,
 	pool:       vk.DescriptorPool,
@@ -110,16 +118,17 @@ compute_atlas_size :: proc(pixel_size: f32, oversample_h, oversample_v: u32) -> 
 
 initialize_text_renderer :: proc(state: ^VulkanState) -> (err: linux.Errno) {
 	t := &state.text_renderer
+	t.atlases = make([dynamic]^Font)
 	t.text_draws = make([dynamic]TextDraw)
 	t.vertices = make([dynamic]TextVertex)
 
 	pool_size := vk.DescriptorPoolSize {
 		type            = .COMBINED_IMAGE_SAMPLER,
-		descriptorCount = 8,
+		descriptorCount = 32,
 	}
 	pool_info := vk.DescriptorPoolCreateInfo {
 		sType         = .DESCRIPTOR_POOL_CREATE_INFO,
-		maxSets       = 8,
+		maxSets       = 32,
 		poolSizeCount = 1,
 		pPoolSizes    = &pool_size,
 	}
@@ -136,10 +145,11 @@ initialize_text_renderer :: proc(state: ^VulkanState) -> (err: linux.Errno) {
 			stageFlags = {.FRAGMENT},
 		},
 	}
+	// starting_capacity = 0: no pipeline-level vertex buffer; each Font owns its own.
 	info := VulkanPipelineInfo {
 		vertex_spv          = #load("shaders/text.vert.spv"),
 		fragment_spv        = #load("shaders/text.frag.spv"),
-		starting_capacity   = 256,
+		starting_capacity   = 0,
 		descriptor_bindings = descriptor_bindings,
 	}
 	initialize_rendering_pipeline(state, &t.pipeline, &info) or_return
@@ -152,6 +162,10 @@ initialize_text_renderer :: proc(state: ^VulkanState) -> (err: linux.Errno) {
 
 destroy_text_renderer :: proc(state: ^VulkanState) {
 	t := &state.text_renderer
+	for font in t.atlases {
+		destroy_font(state, font)
+	}
+	delete(t.atlases)
 	destroy_pipeline(state, &t.pipeline)
 	if t.pool != 0 {
 		vk.DestroyDescriptorPool(state.device, t.pool, nil)
@@ -159,6 +173,23 @@ destroy_text_renderer :: proc(state: ^VulkanState) {
 	}
 	delete(t.text_draws)
 	delete(t.vertices)
+}
+
+// acquire_atlas returns the cached atlas whose pixel_size is within
+// ATLAS_SIZE_TOLERANCE of size, or loads and caches a new one.
+acquire_atlas :: proc(state: ^VulkanState, size: f32) -> (font: ^Font, err: linux.Errno) {
+	t := &state.text_renderer
+	best: ^Font
+	best_diff := max(f32)
+	for atlas in t.atlases {
+		diff := abs(atlas.pixel_size - size)
+		if diff < best_diff {
+			best_diff = diff
+			best = atlas
+		}
+	}
+	if best_diff <= ATLAS_SIZE_TOLERANCE do return best, nil
+	return load_font(state, size)
 }
 
 load_font :: proc(state: ^VulkanState, pixel_size: f32) -> (font: ^Font, err: linux.Errno) {
@@ -271,14 +302,17 @@ load_font :: proc(state: ^VulkanState, pixel_size: f32) -> (font: ^Font, err: li
 	}
 	vk.UpdateDescriptorSets(state.device, 1, &write, 0, nil)
 
+	append(&state.text_renderer.atlases, font)
+
 	if runtime_log.should_log(state.logger, "renderer.text.font_loaded") {
-		fmt.printfln("text: font loaded (%dx%d atlas)", atlas_w, atlas_h)
+		fmt.printfln("text: font loaded (%.0fpx, %dx%d atlas)", pixel_size, atlas_w, atlas_h)
 	}
 	return
 }
 
 destroy_font :: proc(state: ^VulkanState, font: ^Font) {
 	if font == nil do return
+	font_destroy_buffers(state, font)
 	if font.atlas_sampler != 0 {
 		vk.DestroySampler(state.device, font.atlas_sampler, nil)
 	}
@@ -293,6 +327,151 @@ destroy_font :: proc(state: ^VulkanState, font: ^Font) {
 	}
 	free(font)
 }
+
+// ---------------------------------------------------------------------------
+// Per-font vertex / index buffer management
+// ---------------------------------------------------------------------------
+
+@(private)
+font_ensure_buffers :: proc(state: ^VulkanState, font: ^Font, needed_quads: u32) -> linux.Errno {
+	needed_verts := vk.DeviceSize(needed_quads) * 4
+	if needed_verts <= font.vertex_capacity do return nil
+
+	font_destroy_buffers(state, font)
+
+	new_cap := max(needed_verts * 2, 64)
+	new_cap = (new_cap + 3) / 4 * 4
+
+	// Vertex buffer — persistently mapped HOST_VISIBLE|HOST_COHERENT
+	{
+		buf_info := vk.BufferCreateInfo {
+			sType       = .BUFFER_CREATE_INFO,
+			size        = new_cap * size_of(TextVertex),
+			usage       = {.VERTEX_BUFFER},
+			sharingMode = .EXCLUSIVE,
+		}
+		if res := vk.CreateBuffer(state.device, &buf_info, nil, &font.vertex_buf);
+		   res != .SUCCESS {
+			fmt.eprintln("text: vkCreateBuffer (vertex) failed:", res)
+			return .EINVAL
+		}
+		mem_reqs: vk.MemoryRequirements
+		vk.GetBufferMemoryRequirements(state.device, font.vertex_buf, &mem_reqs)
+		mem_type := find_memory_type(
+			state.mem_props,
+			mem_reqs.memoryTypeBits,
+			{.HOST_VISIBLE, .HOST_COHERENT},
+			vk.MemoryPropertyFlags{.HOST_VISIBLE},
+		) or_return
+		alloc := vk.MemoryAllocateInfo {
+			sType           = .MEMORY_ALLOCATE_INFO,
+			allocationSize  = mem_reqs.size,
+			memoryTypeIndex = mem_type,
+		}
+		if res := vk.AllocateMemory(state.device, &alloc, nil, &font.vertex_mem); res != .SUCCESS {
+			fmt.eprintln("text: vkAllocateMemory (vertex) failed:", res)
+			return .ENOMEM
+		}
+		vk.BindBufferMemory(state.device, font.vertex_buf, font.vertex_mem, 0)
+		if res := vk.MapMemory(
+			state.device,
+			font.vertex_mem,
+			0,
+			vk.DeviceSize(vk.WHOLE_SIZE),
+			{},
+			&font.vertex_data,
+		); res != .SUCCESS {
+			fmt.eprintln("text: vkMapMemory (vertex) failed:", res)
+			return .EINVAL
+		}
+	}
+
+	// Index buffer — written once with the fixed quad pattern, then unmapped
+	{
+		n_quads := new_cap / 4
+		indices := make([]u16, n_quads * 6)
+		defer delete(indices)
+		for q in 0 ..< n_quads {
+			base := q * 4
+			i := q * 6
+			indices[i + 0] = u16(base + 0)
+			indices[i + 1] = u16(base + 1)
+			indices[i + 2] = u16(base + 2)
+			indices[i + 3] = u16(base + 2)
+			indices[i + 4] = u16(base + 1)
+			indices[i + 5] = u16(base + 3)
+		}
+		idx_size := vk.DeviceSize(len(indices) * size_of(u16))
+		buf_info := vk.BufferCreateInfo {
+			sType       = .BUFFER_CREATE_INFO,
+			size        = idx_size,
+			usage       = {.INDEX_BUFFER},
+			sharingMode = .EXCLUSIVE,
+		}
+		if res := vk.CreateBuffer(state.device, &buf_info, nil, &font.index_buf); res != .SUCCESS {
+			fmt.eprintln("text: vkCreateBuffer (index) failed:", res)
+			return .EINVAL
+		}
+		mem_reqs: vk.MemoryRequirements
+		vk.GetBufferMemoryRequirements(state.device, font.index_buf, &mem_reqs)
+		mem_type := find_memory_type(
+			state.mem_props,
+			mem_reqs.memoryTypeBits,
+			{.HOST_VISIBLE, .HOST_COHERENT},
+			vk.MemoryPropertyFlags{.HOST_VISIBLE},
+		) or_return
+		alloc := vk.MemoryAllocateInfo {
+			sType           = .MEMORY_ALLOCATE_INFO,
+			allocationSize  = mem_reqs.size,
+			memoryTypeIndex = mem_type,
+		}
+		if res := vk.AllocateMemory(state.device, &alloc, nil, &font.index_mem); res != .SUCCESS {
+			fmt.eprintln("text: vkAllocateMemory (index) failed:", res)
+			return .ENOMEM
+		}
+		vk.BindBufferMemory(state.device, font.index_buf, font.index_mem, 0)
+		mapped: rawptr
+		vk.MapMemory(state.device, font.index_mem, 0, idx_size, {}, &mapped)
+		mem.copy(mapped, raw_data(indices), int(idx_size))
+		flush_range := vk.MappedMemoryRange {
+			sType  = .MAPPED_MEMORY_RANGE,
+			memory = font.index_mem,
+			offset = 0,
+			size   = vk.DeviceSize(vk.WHOLE_SIZE),
+		}
+		vk.FlushMappedMemoryRanges(state.device, 1, &flush_range)
+		vk.UnmapMemory(state.device, font.index_mem)
+	}
+
+	font.vertex_capacity = new_cap
+	return nil
+}
+
+@(private)
+font_destroy_buffers :: proc(state: ^VulkanState, font: ^Font) {
+	if font.vertex_buf != 0 {
+		if font.vertex_data != nil {
+			vk.UnmapMemory(state.device, font.vertex_mem)
+			font.vertex_data = nil
+		}
+		vk.DestroyBuffer(state.device, font.vertex_buf, nil)
+		vk.FreeMemory(state.device, font.vertex_mem, nil)
+		font.vertex_buf = 0
+		font.vertex_mem = 0
+	}
+	if font.index_buf != 0 {
+		vk.DestroyBuffer(state.device, font.index_buf, nil)
+		vk.FreeMemory(state.device, font.index_mem, nil)
+		font.index_buf = 0
+		font.index_mem = 0
+	}
+	font.vertex_capacity = 0
+	font.n_quads = 0
+}
+
+// ---------------------------------------------------------------------------
+// Font atlas GPU upload (unchanged)
+// ---------------------------------------------------------------------------
 
 @(private)
 upload_font_atlas :: proc(
@@ -503,12 +682,6 @@ upload_font_atlas :: proc(
 	return nil
 }
 
-@(private)
-text_scale :: proc(style: TextStyle) -> f32 {
-	if style.size == 0 do return 1
-	return style.size / style.font.pixel_size
-}
-
 // ---------------------------------------------------------------------------
 // Per-frame API
 // ---------------------------------------------------------------------------
@@ -524,7 +697,11 @@ draw_text_top_left :: proc(
 	style: TextStyle,
 	zindex: f32 = 0,
 ) {
-	draw_text(state, text, {pos.x, pos.y + style.font.ascent * text_scale(style)}, style, zindex)
+	font, err := acquire_atlas(state, style.size)
+	if err != nil || font == nil do return
+	scale: f32 = 1
+	if style.size != 0 do scale = style.size / font.pixel_size
+	draw_text(state, text, {pos.x, pos.y + font.ascent * scale}, style, zindex)
 }
 
 draw_text :: proc(
@@ -534,11 +711,6 @@ draw_text :: proc(
 	style: TextStyle,
 	zindex: f32 = 0,
 ) {
-	assert(
-		len(state.text_renderer.text_draws) == 0 ||
-		state.text_renderer.text_draws[0].style.font == style.font,
-		"all draw_text calls in a frame must use the same font",
-	)
 	append(
 		&state.text_renderer.text_draws,
 		TextDraw{text = text, pos = pos, style = style, zindex = zindex},
@@ -557,50 +729,106 @@ end_text :: proc(
 	slice.stable_sort_by(t.text_draws[:], proc(a, b: TextDraw) -> bool {
 		return a.zindex < b.zindex
 	})
-	clear(&t.vertices)
-	for draw in t.text_draws {
-		font := draw.style.font
-		scale := text_scale(draw.style)
-		pen_x := draw.pos.x
-		baseline_y := draw.pos.y
 
-		for r in draw.text {
-			if r < GLYPH_FIRST || int(r) >= GLYPH_FIRST + GLYPH_COUNT do continue
-			g := font.glyphs[int(r) - GLYPH_FIRST]
-			if g.size.x == 0 || g.size.y == 0 {
-				pen_x += g.advance * scale
-				continue
-			}
-
-			x0 := pen_x + g.offset.x * scale
-			y0 := baseline_y + g.offset.y * scale
-			x1 := x0 + g.size.x * scale
-			y1 := y0 + g.size.y * scale
-
-			corners := [4][2]f32{{x0, y0}, {x1, y0}, {x0, y1}, {x1, y1}}
-			uvs := [4][2]f32 {
-				{g.uv_min.x, g.uv_min.y},
-				{g.uv_max.x, g.uv_min.y},
-				{g.uv_min.x, g.uv_max.y},
-				{g.uv_max.x, g.uv_max.y},
-			}
-			for i in 0 ..< 4 {
-				append(
-					&t.vertices,
-					TextVertex{pos = corners[i], uv = uvs[i], color = draw.style.color},
-				)
-			}
-			pen_x += g.advance * scale
-		}
+	// Resolve each draw to its best-matching atlas.
+	ResolvedDraw :: struct {
+		draw: TextDraw,
+		font: ^Font,
+	}
+	resolved := make([]ResolvedDraw, len(t.text_draws))
+	defer delete(resolved)
+	for draw, i in t.text_draws {
+		font, _ := acquire_atlas(state, draw.style.size)
+		resolved[i] = ResolvedDraw{draw, font}
 	}
 
-	if len(t.vertices) == 0 do return nil
-
-	update_pipeline_verticies(state, &t.pipeline, t.vertices[:]) or_return
+	// Collect unique fonts in first-occurrence order.
+	unique_fonts := make([dynamic]^Font)
+	defer delete(unique_fonts)
+	for r in resolved {
+		if r.font == nil do continue
+		already := false
+		for f in unique_fonts {
+			if f == r.font {
+				already = true
+				break
+			}
+		}
+		if !already do append(&unique_fonts, r.font)
+	}
+	if len(unique_fonts) == 0 do return nil
 
 	push := [2]f32{f32(surf_w), f32(surf_h)}
-	font := t.text_draws[0].style.font
-	apply_pipeline(cmd, &t.pipeline, &push, &font.descriptor_set)
+	vk.CmdBindPipeline(cmd, .GRAPHICS, t.pipeline.vk_pipeline)
+	vk.CmdPushConstants(cmd, t.pipeline.layout, {.VERTEX, .FRAGMENT}, 0, size_of(push), &push)
+
+	for font in unique_fonts {
+		clear(&t.vertices)
+		for r in resolved {
+			if r.font != font do continue
+			draw := r.draw
+			scale: f32 = 1
+			if draw.style.size != 0 do scale = draw.style.size / font.pixel_size
+			pen_x := draw.pos.x
+			baseline_y := draw.pos.y
+
+			for ch in draw.text {
+				if ch < GLYPH_FIRST || int(ch) >= GLYPH_FIRST + GLYPH_COUNT do continue
+				g := font.glyphs[int(ch) - GLYPH_FIRST]
+				if g.size.x == 0 || g.size.y == 0 {
+					pen_x += g.advance * scale
+					continue
+				}
+				x0 := pen_x + g.offset.x * scale
+				y0 := baseline_y + g.offset.y * scale
+				x1 := x0 + g.size.x * scale
+				y1 := y0 + g.size.y * scale
+				corners := [4][2]f32{{x0, y0}, {x1, y0}, {x0, y1}, {x1, y1}}
+				uvs := [4][2]f32 {
+					{g.uv_min.x, g.uv_min.y},
+					{g.uv_max.x, g.uv_min.y},
+					{g.uv_min.x, g.uv_max.y},
+					{g.uv_max.x, g.uv_max.y},
+				}
+				for i in 0 ..< 4 {
+					append(
+						&t.vertices,
+						TextVertex{pos = corners[i], uv = uvs[i], color = draw.style.color},
+					)
+				}
+				pen_x += g.advance * scale
+			}
+		}
+		if len(t.vertices) == 0 do continue
+
+		n_quads := u32(len(t.vertices) / 4)
+		font_ensure_buffers(state, font, n_quads) or_return
+
+		mem.copy(font.vertex_data, raw_data(t.vertices), len(t.vertices) * size_of(TextVertex))
+		flush_range := vk.MappedMemoryRange {
+			sType  = .MAPPED_MEMORY_RANGE,
+			memory = font.vertex_mem,
+			offset = 0,
+			size   = vk.DeviceSize(vk.WHOLE_SIZE),
+		}
+		vk.FlushMappedMemoryRanges(state.device, 1, &flush_range)
+		font.n_quads = n_quads
+
+		vk.CmdBindDescriptorSets(
+			cmd,
+			.GRAPHICS,
+			t.pipeline.layout,
+			0,
+			1,
+			&font.descriptor_set,
+			0,
+			nil,
+		)
+		offset: vk.DeviceSize = 0
+		vk.CmdBindVertexBuffers(cmd, 0, 1, &font.vertex_buf, &offset)
+		vk.CmdBindIndexBuffer(cmd, font.index_buf, 0, .UINT16)
+		vk.CmdDrawIndexed(cmd, font.n_quads * 6, 1, 0, 0, 0)
+	}
 
 	return nil
 }
@@ -609,21 +837,33 @@ end_text :: proc(
 // Layout helpers
 // ---------------------------------------------------------------------------
 
-get_text_bounding_box_top_left :: proc(text: string, pos: [2]f32, style: TextStyle) -> Rect {
-	return get_text_bounding_box(
-		text,
-		{pos.x, pos.y + style.font.ascent * text_scale(style)},
-		style,
-	)
+get_text_bounding_box_top_left :: proc(
+	state: ^VulkanState,
+	text: string,
+	pos: [2]f32,
+	style: TextStyle,
+) -> Rect {
+	font, _ := acquire_atlas(state, style.size)
+	if font == nil do return {}
+	scale: f32 = 1
+	if style.size != 0 do scale = style.size / font.pixel_size
+	return get_text_bounding_box(state, text, {pos.x, pos.y + font.ascent * scale}, style)
 }
 
-get_text_bounding_box :: proc(text: string, pos: [2]f32, style: TextStyle) -> Rect {
-	font := style.font
-	scale := text_scale(style)
+get_text_bounding_box :: proc(
+	state: ^VulkanState,
+	text: string,
+	pos: [2]f32,
+	style: TextStyle,
+) -> Rect {
+	font, _ := acquire_atlas(state, style.size)
+	if font == nil do return {}
+	scale: f32 = 1
+	if style.size != 0 do scale = style.size / font.pixel_size
 	total_width: f32
-	for r in text {
-		if r < GLYPH_FIRST || int(r) >= GLYPH_FIRST + GLYPH_COUNT do continue
-		total_width += font.glyphs[int(r) - GLYPH_FIRST].advance * scale
+	for ch in text {
+		if ch < GLYPH_FIRST || int(ch) >= GLYPH_FIRST + GLYPH_COUNT do continue
+		total_width += font.glyphs[int(ch) - GLYPH_FIRST].advance * scale
 	}
 	return Rect {
 		pos = {pos.x, pos.y - font.ascent * scale},

@@ -33,9 +33,7 @@ initialize :: proc(
 	state.logger = logger
 	renderer.initialize_vulkan(&state.vulkan, logger) or_return
 
-	font, font_err := renderer.load_font(&state.vulkan, 24)
-	if font_err != nil do return font_err
-	state.font = font
+	renderer.acquire_atlas(&state.vulkan, 24) or_return
 
 	frame_buf, err := renderer.allocate_vulkan_buffer(&state.vulkan, max_width, max_height)
 	if err != nil do return err
@@ -47,10 +45,6 @@ initialize :: proc(
 }
 
 shutdown :: proc(state: ^State) {
-	if state.font != nil {
-		renderer.destroy_font(&state.vulkan, state.font)
-		state.font = nil
-	}
 	if state.frame_buf.memory != 0 {
 		renderer.free_vulkan_buffer(&state.vulkan, &state.frame_buf)
 	}
@@ -234,7 +228,7 @@ initialize_scene :: proc(state: ^State) {
 		state,
 		renderer.TextData {
 			text = "Hello, World!",
-			style = {font = state.font, color = {1, 1, 1, 1}},
+			style = {color = {1, 1, 1, 1}},
 			anchor = .TopLeft,
 		},
 		false,
@@ -251,8 +245,7 @@ initialize_scene :: proc(state: ^State) {
 layout_hello_world_text :: proc(object: ^SceneObject, state: ^State, info: platform.FrameInfo) {
 	text := object_renderable_text(object)
 	text.pos = {f32(info.width), 0}
-	text.style.font = state.font
-	bounds := renderer.get_bounding_box(text)
+	bounds := renderer.get_bounding_box(&state.vulkan, text)
 	text.pos.x -= bounds.size.x
 	object.renderable = text
 }
@@ -260,7 +253,7 @@ layout_hello_world_text :: proc(object: ^SceneObject, state: ^State, info: platf
 layout_hello_world_background :: proc(object: ^SceneObject, state: ^State, _: platform.FrameInfo) {
 	for other in state.objects {
 		if other.layout_proc == layout_hello_world_text {
-			text_bounds := renderer.get_bounding_box(other.renderable)
+			text_bounds := renderer.get_bounding_box(&state.vulkan, other.renderable)
 			object.renderable = renderer.ShapeData {
 				data = renderer.RectData{pos = text_bounds.pos, size = text_bounds.size},
 				style = {fill_color = {1, 0, 0, 0.7}},
@@ -291,7 +284,7 @@ add_scene_object :: proc(
 		layout_proc = layout_proc,
 		renderable  = renderable,
 		movable     = movable,
-		bounds      = renderer.get_bounding_box(renderable),
+		bounds      = renderer.get_bounding_box(&state.vulkan, renderable),
 	}
 	zindex := renderable_zindex(renderable)
 	lo, hi := 0, len(state.objects)
@@ -313,7 +306,7 @@ layout_scene :: proc(state: ^State, info: platform.FrameInfo) {
 		object := &state.objects[i]
 		if object.layout_proc != nil {
 			object.layout_proc(object, state, info)
-			object.bounds = renderer.get_bounding_box(object.renderable)
+			object.bounds = renderer.get_bounding_box(&state.vulkan, object.renderable)
 		}
 	}
 }
@@ -338,7 +331,7 @@ update_drag :: proc(state: ^State, info: platform.FrameInfo) {
 			target_pos := pointer - state.drag.grab_offset
 			delta := target_pos - object.bounds.pos
 			translate_renderable(&object.renderable, delta)
-			object.bounds = renderer.get_bounding_box(object.renderable)
+			object.bounds = renderer.get_bounding_box(&state.vulkan, object.renderable)
 		}
 	}
 
