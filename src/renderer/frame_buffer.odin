@@ -20,7 +20,7 @@ VulkanFrameBuffer :: struct {
 	framebuffer:       vk.Framebuffer,
 }
 
-allocate_vulkan_buffer :: proc(
+allocate_frame_buffer :: proc(
 	vk_state: ^VulkanState,
 	w: u32,
 	h: u32,
@@ -217,7 +217,7 @@ allocate_vulkan_buffer :: proc(
 	}
 	return buf, nil
 }
-free_vulkan_buffer :: proc(vk_state: ^VulkanState, buf: ^VulkanFrameBuffer) {
+free_frame_buffer :: proc(vk_state: ^VulkanState, buf: ^VulkanFrameBuffer) {
 	if buf.framebuffer != 0 {
 		vk.DestroyFramebuffer(vk_state.device, buf.framebuffer, nil)
 		buf.framebuffer = 0

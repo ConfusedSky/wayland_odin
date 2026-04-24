@@ -35,7 +35,7 @@ initialize :: proc(
 
 	renderer.acquire_atlas(&state.vulkan, 24) or_return
 
-	frame_buf, err := renderer.allocate_vulkan_buffer(&state.vulkan, max_width, max_height)
+	frame_buf, err := renderer.allocate_frame_buffer(&state.vulkan, max_width, max_height)
 	if err != nil do return err
 	state.frame_buf = frame_buf
 	state.objects = make([dynamic]SceneObject)
@@ -46,7 +46,7 @@ initialize :: proc(
 
 shutdown :: proc(state: ^State) {
 	if state.frame_buf.memory != 0 {
-		renderer.free_vulkan_buffer(&state.vulkan, &state.frame_buf)
+		renderer.free_frame_buffer(&state.vulkan, &state.frame_buf)
 	}
 	delete(state.objects)
 	state.logger = nil

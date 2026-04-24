@@ -37,10 +37,7 @@ Font :: struct {
 	atlas_sampler:    vk.Sampler,
 	descriptor_set:   vk.DescriptorSet,
 	n_quads:          u32,
-	vertex_buf:       vk.Buffer,
-	vertex_mem:       vk.DeviceMemory,
-	vertex_data:      rawptr,
-	vertex_capacity:  vk.DeviceSize,
+	vertex_buf:       VulkanBuffer(.VERTEX_BUFFER, TextVertex),
 	index_buf:        vk.Buffer,
 	index_mem:        vk.DeviceMemory,
 }
@@ -342,49 +339,7 @@ font_ensure_buffers :: proc(state: ^VulkanState, font: ^Font, needed_quads: u32)
 	new_cap := max(needed_verts * 2, 64)
 	new_cap = (new_cap + 3) / 4 * 4
 
-	// Vertex buffer — persistently mapped HOST_VISIBLE|HOST_COHERENT
-	{
-		buf_info := vk.BufferCreateInfo {
-			sType       = .BUFFER_CREATE_INFO,
-			size        = new_cap * size_of(TextVertex),
-			usage       = {.VERTEX_BUFFER},
-			sharingMode = .EXCLUSIVE,
-		}
-		if res := vk.CreateBuffer(state.device, &buf_info, nil, &font.vertex_buf);
-		   res != .SUCCESS {
-			fmt.eprintln("text: vkCreateBuffer (vertex) failed:", res)
-			return .EINVAL
-		}
-		mem_reqs: vk.MemoryRequirements
-		vk.GetBufferMemoryRequirements(state.device, font.vertex_buf, &mem_reqs)
-		mem_type := find_memory_type(
-			state.mem_props,
-			mem_reqs.memoryTypeBits,
-			{.HOST_VISIBLE, .HOST_COHERENT},
-			vk.MemoryPropertyFlags{.HOST_VISIBLE},
-		) or_return
-		alloc := vk.MemoryAllocateInfo {
-			sType           = .MEMORY_ALLOCATE_INFO,
-			allocationSize  = mem_reqs.size,
-			memoryTypeIndex = mem_type,
-		}
-		if res := vk.AllocateMemory(state.device, &alloc, nil, &font.vertex_mem); res != .SUCCESS {
-			fmt.eprintln("text: vkAllocateMemory (vertex) failed:", res)
-			return .ENOMEM
-		}
-		vk.BindBufferMemory(state.device, font.vertex_buf, font.vertex_mem, 0)
-		if res := vk.MapMemory(
-			state.device,
-			font.vertex_mem,
-			0,
-			vk.DeviceSize(vk.WHOLE_SIZE),
-			{},
-			&font.vertex_data,
-		); res != .SUCCESS {
-			fmt.eprintln("text: vkMapMemory (vertex) failed:", res)
-			return .EINVAL
-		}
-	}
+	ensure_buffer_capacity(state, &font.vertex_buf, new_cap)
 
 	// Index buffer — written once with the fixed quad pattern, then unmapped
 	{
@@ -738,7 +693,7 @@ end_text :: proc(
 	resolved := make([]ResolvedDraw, len(t.text_draws))
 	defer delete(resolved)
 	for draw, i in t.text_draws {
-		font, _ := acquire_atlas(state, draw.style.size)
+		font := acquire_atlas(state, draw.style.size) or_return
 		resolved[i] = ResolvedDraw{draw, font}
 	}
 
