@@ -82,14 +82,7 @@ render_frame :: proc(
 	update_drag(state, info)
 	layout_scene(state, info)
 
-	renderer.start_shapes(&state.vulkan)
-	renderer.start_text(&state.vulkan)
-
-	for object in state.objects {
-		renderer.draw(&state.vulkan, object.renderable)
-	}
-
-	err = renderer.render_frame(
+	renderer.start_frame(
 		&state.vulkan,
 		&state.frame_buf,
 		renderer.RenderParams {
@@ -97,9 +90,16 @@ render_frame :: proc(
 			height = info.height,
 			pointer_x = f32(info.pointer.x),
 			pointer_y = f32(info.pointer.y),
+			bg_color = {0, 0, 0, 1},
 		},
-	)
-	if err != nil do return false, err
+	) or_return
+	renderer.draw_grid(&state.vulkan)
+
+	for object in state.objects {
+		renderer.draw(&state.vulkan, object.renderable)
+	}
+
+	renderer.end_frame(&state.vulkan) or_return
 
 	return true, nil
 }

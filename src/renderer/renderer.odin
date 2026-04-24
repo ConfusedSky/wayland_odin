@@ -29,6 +29,9 @@ VulkanState :: struct {
 	render_fence:    vk.Fence,
 	shape_renderer:  ShapeRenderer,
 	text_renderer:   TextRenderer,
+	in_frame:        bool,
+	frame_params:    RenderParams,
+	current_buf:     ^VulkanFrameBuffer,
 }
 
 RenderParams :: struct {
@@ -36,6 +39,7 @@ RenderParams :: struct {
 	height:    u32,
 	pointer_x: f32,
 	pointer_y: f32,
+	bg_color:  [4]f32,
 }
 
 VULKAN_DEVICE_EXTENSIONS :: [?]cstring {
@@ -336,22 +340,28 @@ initialize_vulkan_commands :: proc(state: ^VulkanState) -> linux.Errno {
 
 NUM_CELLS :: 10
 
-render_frame :: proc(
-	vk_state: ^VulkanState,
+start_frame :: proc(
+	state: ^VulkanState,
 	buf: ^VulkanFrameBuffer,
 	params: RenderParams,
 ) -> linux.Errno {
-	if res := vk.WaitForFences(vk_state.device, 1, &vk_state.render_fence, true, max(u64));
+	state.frame_params = params
+	state.current_buf = buf
+	state.in_frame = true
+	start_shapes(state)
+	start_text(state)
+
+	if res := vk.WaitForFences(state.device, 1, &state.render_fence, true, max(u64));
 	   res != .SUCCESS {
 		fmt.eprintln("vulkan: vkWaitForFences failed:", res)
 		return .EINVAL
 	}
-	if res := vk.ResetFences(vk_state.device, 1, &vk_state.render_fence); res != .SUCCESS {
+	if res := vk.ResetFences(state.device, 1, &state.render_fence); res != .SUCCESS {
 		fmt.eprintln("vulkan: vkResetFences failed:", res)
 		return .EINVAL
 	}
 
-	if res := vk.ResetCommandBuffer(vk_state.command_buffer, {}); res != .SUCCESS {
+	if res := vk.ResetCommandBuffer(state.command_buffer, {}); res != .SUCCESS {
 		fmt.eprintln("vulkan: vkResetCommandBuffer failed:", res)
 		return .EINVAL
 	}
@@ -360,23 +370,10 @@ render_frame :: proc(
 		sType = .COMMAND_BUFFER_BEGIN_INFO,
 		flags = {.ONE_TIME_SUBMIT},
 	}
-	if res := vk.BeginCommandBuffer(vk_state.command_buffer, &begin_info); res != .SUCCESS {
+	if res := vk.BeginCommandBuffer(state.command_buffer, &begin_info); res != .SUCCESS {
 		fmt.eprintln("vulkan: vkBeginCommandBuffer failed:", res)
 		return .EINVAL
 	}
-
-	clear_value := vk.ClearValue {
-		color = {float32 = {0, 0, 0, 1}},
-	}
-	render_pass_begin := vk.RenderPassBeginInfo {
-		sType = .RENDER_PASS_BEGIN_INFO,
-		renderPass = vk_state.render_pass,
-		framebuffer = buf.framebuffer,
-		renderArea = vk.Rect2D{extent = {width = params.width, height = params.height}},
-		clearValueCount = 1,
-		pClearValues = &clear_value,
-	}
-	vk.CmdBeginRenderPass(vk_state.command_buffer, &render_pass_begin, .INLINE)
 
 	viewport := vk.Viewport {
 		x        = 0,
@@ -386,32 +383,57 @@ render_frame :: proc(
 		minDepth = 0,
 		maxDepth = 1,
 	}
-	vk.CmdSetViewport(vk_state.command_buffer, 0, 1, &viewport)
+	vk.CmdSetViewport(state.command_buffer, 0, 1, &viewport)
 
 	scissor := vk.Rect2D {
 		extent = {width = params.width, height = params.height},
 	}
-	vk.CmdSetScissor(vk_state.command_buffer, 0, 1, &scissor)
+	vk.CmdSetScissor(state.command_buffer, 0, 1, &scissor)
 
+	clear_value := vk.ClearValue {
+		color = {float32 = params.bg_color},
+	}
+	render_pass_begin := vk.RenderPassBeginInfo {
+		sType = .RENDER_PASS_BEGIN_INFO,
+		renderPass = state.render_pass,
+		framebuffer = buf.framebuffer,
+		renderArea = vk.Rect2D{extent = {width = params.width, height = params.height}},
+		clearValueCount = 1,
+		pClearValues = &clear_value,
+	}
+	vk.CmdBeginRenderPass(state.command_buffer, &render_pass_begin, .INLINE)
+
+	return nil
+}
+
+draw_grid :: proc(state: ^VulkanState) {
+	assert(state.in_frame)
 	push_data := [5]f32 {
-		f32(params.width),
-		f32(params.height),
-		params.pointer_x,
-		params.pointer_y,
+		f32(state.frame_params.width),
+		f32(state.frame_params.height),
+		state.frame_params.pointer_x,
+		state.frame_params.pointer_y,
 		f32(NUM_CELLS),
 	}
-	apply_pipeline(vk_state.command_buffer, &vk_state.grid_pipeline, &push_data)
+	apply_pipeline(state.command_buffer, &state.grid_pipeline, &push_data)
+}
 
-	// Draw shapes over the grid if any were submitted this frame
-	if len(vk_state.shape_renderer.shape_data) > 0 {
-		end_shapes(vk_state, vk_state.command_buffer, params.width, params.height) or_return
+end_frame :: proc(state: ^VulkanState) -> linux.Errno {
+	assert(state.in_frame)
+	defer state.in_frame = false
+
+	params := state.frame_params
+	buf := state.current_buf
+
+	if len(state.shape_renderer.shape_data) > 0 {
+		end_shapes(state, state.command_buffer, params.width, params.height) or_return
 	}
 
-	if len(vk_state.text_renderer.text_draws) > 0 {
-		end_text(vk_state, vk_state.command_buffer, params.width, params.height) or_return
+	if len(state.text_renderer.text_draws) > 0 {
+		end_text(state, state.command_buffer, params.width, params.height) or_return
 	}
 
-	vk.CmdEndRenderPass(vk_state.command_buffer)
+	vk.CmdEndRenderPass(state.command_buffer)
 
 	full_subresource_range := vk.ImageSubresourceRange {
 		aspectMask     = {.COLOR},
@@ -446,7 +468,7 @@ render_frame :: proc(
 		},
 	}
 	vk.CmdPipelineBarrier(
-		vk_state.command_buffer,
+		state.command_buffer,
 		{.COLOR_ATTACHMENT_OUTPUT},
 		{.TRANSFER},
 		{},
@@ -464,7 +486,7 @@ render_frame :: proc(
 		extent = {width = params.width, height = params.height, depth = 1},
 	}
 	vk.CmdCopyImage(
-		vk_state.command_buffer,
+		state.command_buffer,
 		buf.render_image,
 		.TRANSFER_SRC_OPTIMAL,
 		buf.image,
@@ -485,7 +507,7 @@ render_frame :: proc(
 		subresourceRange    = full_subresource_range,
 	}
 	vk.CmdPipelineBarrier(
-		vk_state.command_buffer,
+		state.command_buffer,
 		{.TRANSFER},
 		{.BOTTOM_OF_PIPE},
 		{},
@@ -497,7 +519,7 @@ render_frame :: proc(
 		&post_copy_barrier,
 	)
 
-	if res := vk.EndCommandBuffer(vk_state.command_buffer); res != .SUCCESS {
+	if res := vk.EndCommandBuffer(state.command_buffer); res != .SUCCESS {
 		fmt.eprintln("vulkan: vkEndCommandBuffer failed:", res)
 		return .EINVAL
 	}
@@ -505,15 +527,15 @@ render_frame :: proc(
 	submit_info := vk.SubmitInfo {
 		sType              = .SUBMIT_INFO,
 		commandBufferCount = 1,
-		pCommandBuffers    = &vk_state.command_buffer,
+		pCommandBuffers    = &state.command_buffer,
 	}
-	if res := vk.QueueSubmit(vk_state.graphics_queue, 1, &submit_info, vk_state.render_fence);
+	if res := vk.QueueSubmit(state.graphics_queue, 1, &submit_info, state.render_fence);
 	   res != .SUCCESS {
 		fmt.eprintln("vulkan: vkQueueSubmit failed:", res)
 		return .EINVAL
 	}
 
-	if res := vk.WaitForFences(vk_state.device, 1, &vk_state.render_fence, true, max(u64));
+	if res := vk.WaitForFences(state.device, 1, &state.render_fence, true, max(u64));
 	   res != .SUCCESS {
 		fmt.eprintln("vulkan: vkWaitForFences (post-submit) failed:", res)
 		return .EINVAL
