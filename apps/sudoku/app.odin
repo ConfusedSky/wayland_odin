@@ -1,7 +1,6 @@
 package demo
 
 import "core:fmt"
-import "core:math"
 import "core:sys/linux"
 
 import "src:constants"
@@ -23,6 +22,17 @@ log_blacklist: []string : {
 	"wayland.request.xdg_wm_base.pong",
 	"platform.recv_batch",
 }
+
+WHITE := [4]f32{1, 1, 1, 1}
+BLACK := [4]f32{0, 0, 0, 1}
+GRAY := [4]f32{0.8, 0.8, 0.8, 1}
+GRAY_STYLE := renderer.ShapeStyle {
+	fill_color = GRAY,
+}
+BLACK_STYLE := renderer.ShapeStyle {
+	fill_color = BLACK,
+}
+LINE_WIDTH: f32 = 4
 
 initialize :: proc(
 	state: ^State,
@@ -77,17 +87,6 @@ render_frame :: proc(
 	}
 
 
-	white := [4]f32{1, 1, 1, 1}
-	black := [4]f32{0, 0, 0, 1}
-	gray := [4]f32{0.8, 0.8, 0.8, 1}
-	gray_style := renderer.ShapeStyle {
-		fill_color = gray,
-	}
-	black_style := renderer.ShapeStyle {
-		fill_color = black,
-	}
-	line_width: f32 = 2
-
 	renderer.start_frame(
 		&state.vulkan,
 		&state.frame_buf,
@@ -96,10 +95,18 @@ render_frame :: proc(
 			height = info.height,
 			pointer_x = f32(info.pointer.x),
 			pointer_y = f32(info.pointer.y),
-			bg_color = gray,
+			bg_color = GRAY,
 		},
 	) or_return
 
+	draw_grid(state, info)
+
+	renderer.end_frame(&state.vulkan) or_return
+
+	return true, nil
+}
+
+draw_grid :: proc(state: ^State, info: platform.FrameInfo) {
 	window_width := f32(info.width)
 	window_height := f32(info.height)
 	square_size := min(window_width, window_height)
@@ -118,29 +125,29 @@ render_frame :: proc(
 				size = {grid_size + 2, grid_size + 2},
 			},
 			style = renderer.ShapeStyle {
-				border_color = black,
-				border_width = line_width,
-				fill_color = white,
+				border_color = BLACK,
+				border_width = LINE_WIDTH,
+				fill_color = WHITE,
 			},
 		},
 	)
 
 	for i in 1 ..= 2 {
-		x := grid_x + grid_size * f32(i) / 3 - line_width / 2
-		y := grid_y + grid_size * f32(i) / 3 - line_width / 2
+		x := grid_x + grid_size * f32(i) / 3 - LINE_WIDTH / 2
+		y := grid_y + grid_size * f32(i) / 3 - LINE_WIDTH / 2
 		renderer.draw_shape(
 			&state.vulkan,
 			renderer.ShapeData {
-				data = renderer.RectData{pos = {x, grid_y}, size = {line_width, grid_size}},
-				style = black_style,
+				data = renderer.RectData{pos = {x, grid_y}, size = {LINE_WIDTH, grid_size}},
+				style = BLACK_STYLE,
 			},
 		)
 
 		renderer.draw_shape(
 			&state.vulkan,
 			renderer.ShapeData {
-				data = renderer.RectData{pos = {grid_x, y}, size = {grid_size, line_width}},
-				style = black_style,
+				data = renderer.RectData{pos = {grid_x, y}, size = {grid_size, LINE_WIDTH}},
+				style = BLACK_STYLE,
 			},
 		)
 	}
@@ -148,28 +155,25 @@ render_frame :: proc(
 	for i in 1 ..= 8 {
 		if i % 3 == 0 do continue
 
-		x := grid_x + grid_size * f32(i) / 9 - line_width / 2
-		y := grid_y + grid_size * f32(i) / 9 - line_width / 2
+		x := grid_x + grid_size * f32(i) / 9 - LINE_WIDTH / 2
+		y := grid_y + grid_size * f32(i) / 9 - LINE_WIDTH / 2
 		renderer.draw_shape(
 			&state.vulkan,
 			renderer.ShapeData {
-				data = renderer.RectData{pos = {x, grid_y}, size = {1, grid_size}},
-				style = black_style,
+				data = renderer.RectData{pos = {x, grid_y}, size = {LINE_WIDTH / 2, grid_size}},
+				style = BLACK_STYLE,
 			},
 		)
 
 		renderer.draw_shape(
 			&state.vulkan,
 			renderer.ShapeData {
-				data = renderer.RectData{pos = {grid_x, y}, size = {grid_size, 1}},
-				style = black_style,
+				data = renderer.RectData{pos = {grid_x, y}, size = {grid_size, LINE_WIDTH / 2}},
+				style = BLACK_STYLE,
 			},
 		)
 	}
 
-	renderer.end_frame(&state.vulkan) or_return
-
-	return true, nil
 }
 
 point_in_rect :: proc(point: [2]f32, rect: renderer.Rect) -> bool {
