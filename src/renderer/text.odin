@@ -11,7 +11,6 @@ import stbtt "vendor:stb/truetype"
 import vk "vendor:vulkan"
 
 FONT_PATH :: "/usr/share/fonts/Adwaita/AdwaitaSans-Regular.ttf"
-FONT_PIXEL_SIZE :: f32(24)
 FONT_OVERSAMPLE_H :: u32(4)
 FONT_OVERSAMPLE_V :: u32(4)
 
@@ -27,6 +26,7 @@ GlyphInfo :: struct {
 }
 
 Font :: struct {
+	pixel_size:       f32,
 	ascent, descent:  f32,
 	glyphs:           [GLYPH_COUNT]GlyphInfo,
 	atlas_w, atlas_h: u32,
@@ -53,6 +53,7 @@ TextData :: struct {
 TextStyle :: struct {
 	font:  ^Font,
 	color: [4]f32,
+	size:  f32,
 }
 
 TextVertex :: struct #packed {
@@ -160,7 +161,7 @@ destroy_text_renderer :: proc(state: ^VulkanState) {
 	delete(t.vertices)
 }
 
-load_font :: proc(state: ^VulkanState) -> (font: ^Font, err: linux.Errno) {
+load_font :: proc(state: ^VulkanState, pixel_size: f32) -> (font: ^Font, err: linux.Errno) {
 	font = new(Font)
 	defer if err != nil {
 		destroy_font(state, font)
@@ -175,7 +176,8 @@ load_font :: proc(state: ^VulkanState) -> (font: ^Font, err: linux.Errno) {
 	}
 	defer delete(font_data)
 
-	atlas_w, atlas_h := compute_atlas_size(FONT_PIXEL_SIZE, FONT_OVERSAMPLE_H, FONT_OVERSAMPLE_V)
+	font.pixel_size = pixel_size
+	atlas_w, atlas_h := compute_atlas_size(pixel_size, FONT_OVERSAMPLE_H, FONT_OVERSAMPLE_V)
 	font.atlas_w = atlas_w
 	font.atlas_h = atlas_h
 
@@ -194,7 +196,7 @@ load_font :: proc(state: ^VulkanState) -> (font: ^Font, err: linux.Errno) {
 		&spc,
 		raw_data(font_data),
 		0,
-		FONT_PIXEL_SIZE,
+		pixel_size,
 		GLYPH_FIRST,
 		GLYPH_COUNT,
 		&chardata[0],
@@ -210,7 +212,7 @@ load_font :: proc(state: ^VulkanState) -> (font: ^Font, err: linux.Errno) {
 	stbtt.GetScaledFontVMetrics(
 		raw_data(font_data),
 		0,
-		FONT_PIXEL_SIZE,
+		pixel_size,
 		&font.ascent,
 		&font.descent,
 		&line_gap,
@@ -501,6 +503,12 @@ upload_font_atlas :: proc(
 	return nil
 }
 
+@(private)
+text_scale :: proc(style: TextStyle) -> f32 {
+	if style.size == 0 do return 1
+	return style.size / style.font.pixel_size
+}
+
 // ---------------------------------------------------------------------------
 // Per-frame API
 // ---------------------------------------------------------------------------
@@ -516,7 +524,7 @@ draw_text_top_left :: proc(
 	style: TextStyle,
 	zindex: f32 = 0,
 ) {
-	draw_text(state, text, {pos.x, pos.y + style.font.ascent}, style, zindex)
+	draw_text(state, text, {pos.x, pos.y + style.font.ascent * text_scale(style)}, style, zindex)
 }
 
 draw_text :: proc(
@@ -552,6 +560,7 @@ end_text :: proc(
 	clear(&t.vertices)
 	for draw in t.text_draws {
 		font := draw.style.font
+		scale := text_scale(draw.style)
 		pen_x := draw.pos.x
 		baseline_y := draw.pos.y
 
@@ -559,14 +568,14 @@ end_text :: proc(
 			if r < GLYPH_FIRST || int(r) >= GLYPH_FIRST + GLYPH_COUNT do continue
 			g := font.glyphs[int(r) - GLYPH_FIRST]
 			if g.size.x == 0 || g.size.y == 0 {
-				pen_x += g.advance
+				pen_x += g.advance * scale
 				continue
 			}
 
-			x0 := pen_x + g.offset.x
-			y0 := baseline_y + g.offset.y
-			x1 := x0 + g.size.x
-			y1 := y0 + g.size.y
+			x0 := pen_x + g.offset.x * scale
+			y0 := baseline_y + g.offset.y * scale
+			x1 := x0 + g.size.x * scale
+			y1 := y0 + g.size.y * scale
 
 			corners := [4][2]f32{{x0, y0}, {x1, y0}, {x0, y1}, {x1, y1}}
 			uvs := [4][2]f32 {
@@ -581,7 +590,7 @@ end_text :: proc(
 					TextVertex{pos = corners[i], uv = uvs[i], color = draw.style.color},
 				)
 			}
-			pen_x += g.advance
+			pen_x += g.advance * scale
 		}
 	}
 
@@ -601,18 +610,23 @@ end_text :: proc(
 // ---------------------------------------------------------------------------
 
 get_text_bounding_box_top_left :: proc(text: string, pos: [2]f32, style: TextStyle) -> Rect {
-	return get_text_bounding_box(text, {pos.x, pos.y + style.font.ascent}, style)
+	return get_text_bounding_box(
+		text,
+		{pos.x, pos.y + style.font.ascent * text_scale(style)},
+		style,
+	)
 }
 
 get_text_bounding_box :: proc(text: string, pos: [2]f32, style: TextStyle) -> Rect {
 	font := style.font
+	scale := text_scale(style)
 	total_width: f32
 	for r in text {
 		if r < GLYPH_FIRST || int(r) >= GLYPH_FIRST + GLYPH_COUNT do continue
-		total_width += font.glyphs[int(r) - GLYPH_FIRST].advance
+		total_width += font.glyphs[int(r) - GLYPH_FIRST].advance * scale
 	}
 	return Rect {
-		pos = {pos.x, pos.y - font.ascent},
-		size = {total_width, font.ascent - font.descent},
+		pos = {pos.x, pos.y - font.ascent * scale},
+		size = {total_width, (font.ascent - font.descent) * scale},
 	}
 }

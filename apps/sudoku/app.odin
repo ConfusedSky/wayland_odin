@@ -33,7 +33,7 @@ initialize :: proc(
 	state.logger = logger
 	renderer.initialize_vulkan(&state.vulkan, logger) or_return
 
-	font, font_err := renderer.load_font(&state.vulkan)
+	font, font_err := renderer.load_font(&state.vulkan, 48)
 	if font_err != nil do return font_err
 	state.font = font
 
