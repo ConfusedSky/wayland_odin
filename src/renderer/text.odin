@@ -37,7 +37,6 @@ Font :: struct {
 	atlas_sampler:    vk.Sampler,
 	descriptor_set:   vk.DescriptorSet,
 	vertex_buf:       VulkanBuffer(.VERTEX_BUFFER, TextVertex),
-	index_buf:        QuadIndexBuffer,
 }
 
 TextAnchor :: enum int {
@@ -343,7 +342,7 @@ font_ensure_buffers :: proc(state: ^VulkanState, font: ^Font, needed_quads: u32)
 	new_cap = (new_cap + 3) / 4 * 4
 
 	ensure_buffer_capacity(state, &font.vertex_buf, new_cap) or_return
-	ensure_quad_index_buffer(state, &font.index_buf, new_cap / 4) or_return
+	ensure_quad_index_buffer(state, &state.quad_index_buf, new_cap / 4) or_return
 
 	return nil
 }
@@ -351,7 +350,6 @@ font_ensure_buffers :: proc(state: ^VulkanState, font: ^Font, needed_quads: u32)
 @(private)
 font_destroy_buffers :: proc(state: ^VulkanState, font: ^Font) {
 	destroy_buffer(state, &font.vertex_buf)
-	destroy_buffer(state, &font.index_buf)
 }
 
 // ---------------------------------------------------------------------------
@@ -571,6 +569,39 @@ upload_font_atlas :: proc(
 // Per-frame API
 // ---------------------------------------------------------------------------
 
+// Ensures all GPU buffers are large enough for the current frame's text draws.
+// Must be called before end_text, outside the command buffer render pass.
+ensure_text :: proc(state: ^VulkanState) -> linux.Errno {
+	t := &state.text_renderer
+	if len(t.text_draws) == 0 do return nil
+
+	FontQuads :: struct {
+		font:  ^Font,
+		quads: u32,
+	}
+	per_font := make([dynamic]FontQuads)
+	defer delete(per_font)
+
+	for draw in t.text_draws {
+		font := acquire_atlas(state, draw.style.size) or_return
+		if font == nil do continue
+		found := false
+		for &fq in per_font {
+			if fq.font == font {
+				fq.quads += u32(len(draw.text))
+				found = true
+				break
+			}
+		}
+		if !found do append(&per_font, FontQuads{font, u32(len(draw.text))})
+	}
+
+	for fq in per_font {
+		font_ensure_buffers(state, fq.font, fq.quads) or_return
+	}
+	return nil
+}
+
 start_text :: proc(state: ^VulkanState) {
 	clear(&state.text_renderer.text_draws)
 }
@@ -685,12 +716,11 @@ end_text :: proc(
 		if len(t.vertices) == 0 do continue
 
 		n_quads := u32(len(t.vertices) / 4)
-		font_ensure_buffers(state, font, n_quads) or_return
 		set_buffer_data(state, &font.vertex_buf, t.vertices[:])
 
 		bind_pipeline(cmd, &t.pipeline, &push, &font.descriptor_set)
 		bind_vertex_buffer(cmd, &t.pipeline, &font.vertex_buf)
-		bind_index_buffer(cmd, &t.pipeline, &font.index_buf)
+		bind_index_buffer(cmd, &t.pipeline, &state.quad_index_buf)
 		draw_pipeline(cmd, &t.pipeline, n_quads)
 	}
 

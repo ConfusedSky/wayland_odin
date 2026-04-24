@@ -24,6 +24,7 @@ VulkanState :: struct {
 	graphics_family: u32,
 	render_pass:     vk.RenderPass,
 	grid_pipeline:   VulkanPipeline(5, NoVertex),
+	quad_index_buf:  QuadIndexBuffer,
 	command_pool:    vk.CommandPool,
 	command_buffer:  vk.CommandBuffer,
 	render_fence:    vk.Fence,
@@ -426,6 +427,9 @@ end_frame :: proc(state: ^VulkanState) -> linux.Errno {
 	params := state.frame_params
 	buf := state.current_buf
 
+	ensure_shapes(state) or_return
+	ensure_text(state) or_return
+
 	if len(state.shape_renderer.shape_data) > 0 {
 		end_shapes(state, state.command_buffer, params.width, params.height) or_return
 	}
@@ -550,6 +554,7 @@ cleanup_vulkan :: proc(state: ^VulkanState) {
 		vk.DeviceWaitIdle(state.device)
 		destroy_shape_renderer(state)
 		destroy_text_renderer(state)
+		destroy_buffer(state, &state.quad_index_buf)
 		destroy_pipeline(state, &state.grid_pipeline)
 		if state.render_fence != 0 {
 			vk.DestroyFence(state.device, state.render_fence, nil)

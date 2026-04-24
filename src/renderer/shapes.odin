@@ -98,7 +98,6 @@ ShapeRenderer :: struct {
 	vertices:   [dynamic]ShapeVertex, // per-frame scratch: sorted shapes expanded to 4 verts each
 	pipeline:   VulkanPipeline(2, ShapeVertex),
 	vertex_buf: VulkanBuffer(.VERTEX_BUFFER, ShapeVertex),
-	index_buf:  QuadIndexBuffer,
 }
 
 // ---------------------------------------------------------------------------
@@ -122,7 +121,6 @@ initialize_shape_renderer :: proc(state: ^VulkanState) -> linux.Errno {
 destroy_shape_renderer :: proc(state: ^VulkanState) {
 	s := &state.shape_renderer
 	destroy_buffer(state, &s.vertex_buf)
-	destroy_buffer(state, &s.index_buf)
 	destroy_pipeline(state, &s.pipeline)
 	delete(s.shape_data)
 	delete(s.vertices)
@@ -142,6 +140,16 @@ draw_shape :: proc(state: ^VulkanState, shape: ShapeData) {
 
 get_shape_bounding_box :: proc(shape: ShapeData) -> Rect {
 	return get_shape_bounding_quad(shape)
+}
+
+// Ensures all GPU buffers are large enough for the current frame's shapes.
+// Must be called before end_shapes, outside the command buffer render pass.
+ensure_shapes :: proc(state: ^VulkanState) -> linux.Errno {
+	n_quads := vk.DeviceSize(len(state.shape_renderer.shape_data))
+	if n_quads == 0 do return nil
+	ensure_buffer_capacity(state, &state.shape_renderer.vertex_buf, n_quads * 4) or_return
+	ensure_quad_index_buffer(state, &state.quad_index_buf, n_quads) or_return
+	return nil
 }
 
 // Called from render_frame after the grid draw, inside the render pass.
@@ -169,12 +177,11 @@ end_shapes :: proc(
 
 	n_quads := u32(len(shapes.vertices) / 4)
 	set_buffer_data(state, &shapes.vertex_buf, shapes.vertices[:])
-	ensure_quad_index_buffer(state, &shapes.index_buf, vk.DeviceSize(n_quads)) or_return
 
 	push := [2]f32{f32(surf_w), f32(surf_h)}
 	bind_pipeline(cmd, &shapes.pipeline, &push)
 	bind_vertex_buffer(cmd, &shapes.pipeline, &shapes.vertex_buf)
-	bind_index_buffer(cmd, &shapes.pipeline, &shapes.index_buf)
+	bind_index_buffer(cmd, &shapes.pipeline, &state.quad_index_buf)
 	draw_pipeline(cmd, &shapes.pipeline, n_quads)
 
 	return nil
