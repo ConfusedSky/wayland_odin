@@ -9,4 +9,5 @@ State :: struct {
 	font:        ^renderer.Font,
 	logger:      ^runtime_log.Logger,
 	initialized: bool,
+	board:       [81]int,
 }

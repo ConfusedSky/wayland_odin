@@ -1,6 +1,7 @@
 package demo
 
 import "core:fmt"
+import "core:math/rand"
 import "core:sys/linux"
 
 import "src:constants"
@@ -50,6 +51,10 @@ initialize :: proc(
 	frame_buf, err := renderer.allocate_vulkan_buffer(&state.vulkan, max_width, max_height)
 	if err != nil do return err
 	state.frame_buf = frame_buf
+	for i in 0 ..< 81 {
+		state.board[i] = rand.int_max(9) + 1
+	}
+
 	state.initialized = true
 	return nil
 }
@@ -174,6 +179,25 @@ draw_grid :: proc(state: ^State, info: platform.FrameInfo) {
 		)
 	}
 
+	cell_size := grid_size / 9
+	digit_style := renderer.TextStyle {
+		font  = state.font,
+		color = BLACK,
+		size  = cell_size * 0.65,
+	}
+	digit_strs := [10]string{"0", "1", "2", "3", "4", "5", "6", "7", "8", "9"}
+	for row in 0 ..< 9 {
+		for col in 0 ..< 9 {
+			digit_str := digit_strs[state.board[row * 9 + col]]
+			cell_center := [2]f32 {
+				grid_x + (f32(col) + 0.5) * cell_size,
+				grid_y + (f32(row) + 0.5) * cell_size,
+			}
+			bbox := renderer.get_text_bounding_box_top_left(digit_str, {0, 0}, digit_style)
+			pos := [2]f32{cell_center.x - bbox.size.x / 2, cell_center.y - bbox.size.y / 2}
+			renderer.draw_text_top_left(&state.vulkan, digit_str, pos, digit_style)
+		}
+	}
 }
 
 point_in_rect :: proc(point: [2]f32, rect: renderer.Rect) -> bool {
