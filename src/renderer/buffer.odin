@@ -12,6 +12,8 @@ VulkanBuffer :: struct(Stage: vk.BufferUsageFlag, Type: typeid) {
 	data:     rawptr,
 }
 
+QuadIndexBuffer :: VulkanBuffer(.INDEX_BUFFER, u16)
+
 allocate_buffer :: proc(
 	state: ^VulkanState,
 	buffer: ^VulkanBuffer($Stage, $Type),
@@ -78,7 +80,7 @@ allocate_buffer :: proc(
 }
 
 set_buffer_data :: proc(state: ^VulkanState, buffer: ^VulkanBuffer($Stage, $Type), data: []Type) {
-	ensure_buffer_capacity(state, buffer, len(data))
+	ensure_buffer_capacity(state, buffer, vk.DeviceSize(len(data)))
 
 	mem.copy(buffer.data, raw_data(data), len(data) * size_of(Type))
 	flush_buffer(state, buffer)
@@ -118,4 +120,41 @@ destroy_buffer :: proc(state: ^VulkanState, buffer: ^VulkanBuffer($Stage, $Type)
 		buffer.buffer = 0
 		buffer.memory = 0
 	}
+}
+
+allocate_quad_index_buffer :: proc(
+	state: ^VulkanState,
+	buffer: ^QuadIndexBuffer,
+	n_quads: vk.DeviceSize,
+) -> linux.Errno {
+	allocate_buffer(state, buffer, n_quads * 6) or_return
+
+	indices := make([]u16, n_quads * 6)
+	defer delete(indices)
+	for q in 0 ..< n_quads {
+		base := q * 4
+		i := q * 6
+		indices[i + 0] = u16(base + 0)
+		indices[i + 1] = u16(base + 1)
+		indices[i + 2] = u16(base + 2)
+		indices[i + 3] = u16(base + 2)
+		indices[i + 4] = u16(base + 1)
+		indices[i + 5] = u16(base + 3)
+	}
+	set_buffer_data(state, buffer, indices)
+
+	return nil
+}
+
+ensure_quad_index_buffer :: proc(
+	state: ^VulkanState,
+	buffer: ^QuadIndexBuffer,
+	n_quads: vk.DeviceSize,
+) -> linux.Errno {
+	if n_quads * 6 <= buffer.capacity do return nil
+
+	destroy_buffer(state, buffer)
+	allocate_quad_index_buffer(state, buffer, n_quads) or_return
+
+	return nil
 }
