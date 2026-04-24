@@ -65,8 +65,14 @@ allocate_buffer :: proc(
 		return .EINVAL
 	}
 
-	if res := vk.MapMemory(state.device, buffer.memory, 0, capacity, {}, &buffer.data);
-	   res != .SUCCESS {
+	if res := vk.MapMemory(
+		state.device,
+		buffer.memory,
+		0,
+		vk.DeviceSize(vk.WHOLE_SIZE),
+		{},
+		&buffer.data,
+	); res != .SUCCESS {
 		return .EINVAL
 	}
 	defer if err != nil {

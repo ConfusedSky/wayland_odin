@@ -38,8 +38,7 @@ Font :: struct {
 	descriptor_set:   vk.DescriptorSet,
 	n_quads:          u32,
 	vertex_buf:       VulkanBuffer(.VERTEX_BUFFER, TextVertex),
-	index_buf:        vk.Buffer,
-	index_mem:        vk.DeviceMemory,
+	index_buf:        QuadIndexBuffer,
 }
 
 TextAnchor :: enum int {
@@ -332,95 +331,21 @@ destroy_font :: proc(state: ^VulkanState, font: ^Font) {
 @(private)
 font_ensure_buffers :: proc(state: ^VulkanState, font: ^Font, needed_quads: u32) -> linux.Errno {
 	needed_verts := vk.DeviceSize(needed_quads) * 4
-	if needed_verts <= font.vertex_capacity do return nil
-
-	font_destroy_buffers(state, font)
+	if needed_verts <= font.vertex_buf.capacity do return nil
 
 	new_cap := max(needed_verts * 2, 64)
 	new_cap = (new_cap + 3) / 4 * 4
 
-	ensure_buffer_capacity(state, &font.vertex_buf, new_cap)
+	ensure_buffer_capacity(state, &font.vertex_buf, new_cap) or_return
+	ensure_quad_index_buffer(state, &font.index_buf, new_cap / 4) or_return
 
-	// Index buffer — written once with the fixed quad pattern, then unmapped
-	{
-		n_quads := new_cap / 4
-		indices := make([]u16, n_quads * 6)
-		defer delete(indices)
-		for q in 0 ..< n_quads {
-			base := q * 4
-			i := q * 6
-			indices[i + 0] = u16(base + 0)
-			indices[i + 1] = u16(base + 1)
-			indices[i + 2] = u16(base + 2)
-			indices[i + 3] = u16(base + 2)
-			indices[i + 4] = u16(base + 1)
-			indices[i + 5] = u16(base + 3)
-		}
-		idx_size := vk.DeviceSize(len(indices) * size_of(u16))
-		buf_info := vk.BufferCreateInfo {
-			sType       = .BUFFER_CREATE_INFO,
-			size        = idx_size,
-			usage       = {.INDEX_BUFFER},
-			sharingMode = .EXCLUSIVE,
-		}
-		if res := vk.CreateBuffer(state.device, &buf_info, nil, &font.index_buf); res != .SUCCESS {
-			fmt.eprintln("text: vkCreateBuffer (index) failed:", res)
-			return .EINVAL
-		}
-		mem_reqs: vk.MemoryRequirements
-		vk.GetBufferMemoryRequirements(state.device, font.index_buf, &mem_reqs)
-		mem_type := find_memory_type(
-			state.mem_props,
-			mem_reqs.memoryTypeBits,
-			{.HOST_VISIBLE, .HOST_COHERENT},
-			vk.MemoryPropertyFlags{.HOST_VISIBLE},
-		) or_return
-		alloc := vk.MemoryAllocateInfo {
-			sType           = .MEMORY_ALLOCATE_INFO,
-			allocationSize  = mem_reqs.size,
-			memoryTypeIndex = mem_type,
-		}
-		if res := vk.AllocateMemory(state.device, &alloc, nil, &font.index_mem); res != .SUCCESS {
-			fmt.eprintln("text: vkAllocateMemory (index) failed:", res)
-			return .ENOMEM
-		}
-		vk.BindBufferMemory(state.device, font.index_buf, font.index_mem, 0)
-		mapped: rawptr
-		vk.MapMemory(state.device, font.index_mem, 0, idx_size, {}, &mapped)
-		mem.copy(mapped, raw_data(indices), int(idx_size))
-		flush_range := vk.MappedMemoryRange {
-			sType  = .MAPPED_MEMORY_RANGE,
-			memory = font.index_mem,
-			offset = 0,
-			size   = vk.DeviceSize(vk.WHOLE_SIZE),
-		}
-		vk.FlushMappedMemoryRanges(state.device, 1, &flush_range)
-		vk.UnmapMemory(state.device, font.index_mem)
-	}
-
-	font.vertex_capacity = new_cap
 	return nil
 }
 
 @(private)
 font_destroy_buffers :: proc(state: ^VulkanState, font: ^Font) {
-	if font.vertex_buf != 0 {
-		if font.vertex_data != nil {
-			vk.UnmapMemory(state.device, font.vertex_mem)
-			font.vertex_data = nil
-		}
-		vk.DestroyBuffer(state.device, font.vertex_buf, nil)
-		vk.FreeMemory(state.device, font.vertex_mem, nil)
-		font.vertex_buf = 0
-		font.vertex_mem = 0
-	}
-	if font.index_buf != 0 {
-		vk.DestroyBuffer(state.device, font.index_buf, nil)
-		vk.FreeMemory(state.device, font.index_mem, nil)
-		font.index_buf = 0
-		font.index_mem = 0
-	}
-	font.vertex_capacity = 0
+	destroy_buffer(state, &font.vertex_buf)
+	destroy_buffer(state, &font.index_buf)
 	font.n_quads = 0
 }
 
@@ -517,7 +442,7 @@ upload_font_atlas :: proc(
 	vk.BindBufferMemory(state.device, staging_buf, staging_mem, 0)
 
 	mapped: rawptr
-	vk.MapMemory(state.device, staging_mem, 0, staging_size, {}, &mapped)
+	vk.MapMemory(state.device, staging_mem, 0, vk.DeviceSize(vk.WHOLE_SIZE), {}, &mapped)
 	mem.copy(mapped, raw_data(bitmap), len(bitmap))
 	flush_range := vk.MappedMemoryRange {
 		sType  = .MAPPED_MEMORY_RANGE,
@@ -759,14 +684,7 @@ end_text :: proc(
 		n_quads := u32(len(t.vertices) / 4)
 		font_ensure_buffers(state, font, n_quads) or_return
 
-		mem.copy(font.vertex_data, raw_data(t.vertices), len(t.vertices) * size_of(TextVertex))
-		flush_range := vk.MappedMemoryRange {
-			sType  = .MAPPED_MEMORY_RANGE,
-			memory = font.vertex_mem,
-			offset = 0,
-			size   = vk.DeviceSize(vk.WHOLE_SIZE),
-		}
-		vk.FlushMappedMemoryRanges(state.device, 1, &flush_range)
+		set_buffer_data(state, &font.vertex_buf, t.vertices[:])
 		font.n_quads = n_quads
 
 		vk.CmdBindDescriptorSets(
@@ -780,8 +698,8 @@ end_text :: proc(
 			nil,
 		)
 		offset: vk.DeviceSize = 0
-		vk.CmdBindVertexBuffers(cmd, 0, 1, &font.vertex_buf, &offset)
-		vk.CmdBindIndexBuffer(cmd, font.index_buf, 0, .UINT16)
+		vk.CmdBindVertexBuffers(cmd, 0, 1, &font.vertex_buf.buffer, &offset)
+		vk.CmdBindIndexBuffer(cmd, font.index_buf.buffer, 0, .UINT16)
 		vk.CmdDrawIndexed(cmd, font.n_quads * 6, 1, 0, 0, 0)
 	}
 

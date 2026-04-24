@@ -386,7 +386,14 @@ allocate_pipeline_buffers :: proc(
 	index_size := vk.DeviceSize(len(indices) * size_of(u16))
 
 	idx_mapped: rawptr
-	vk.MapMemory(state.device, pipeline.index_memory, 0, index_size, {}, &idx_mapped)
+	vk.MapMemory(
+		state.device,
+		pipeline.index_memory,
+		0,
+		vk.DeviceSize(vk.WHOLE_SIZE),
+		{},
+		&idx_mapped,
+	)
 	mem.copy(idx_mapped, &indices[0], int(index_size))
 	flush_mapped_memory(state.device, pipeline.index_memory)
 	vk.UnmapMemory(state.device, pipeline.index_memory)
