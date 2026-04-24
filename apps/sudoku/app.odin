@@ -155,8 +155,8 @@ draw_grid :: proc(state: ^State, info: platform.FrameInfo) {
 	for i in 1 ..= 8 {
 		if i % 3 == 0 do continue
 
-		x := grid_x + grid_size * f32(i) / 9 - LINE_WIDTH / 2
-		y := grid_y + grid_size * f32(i) / 9 - LINE_WIDTH / 2
+		x := grid_x + grid_size * f32(i) / 9 - LINE_WIDTH / 4
+		y := grid_y + grid_size * f32(i) / 9 - LINE_WIDTH / 4
 		renderer.draw_shape(
 			&state.vulkan,
 			renderer.ShapeData {
