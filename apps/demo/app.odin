@@ -228,7 +228,7 @@ initialize_scene :: proc(state: ^State) {
 		state,
 		renderer.TextData {
 			text = "Hello, World!",
-			style = {color = {1, 1, 1, 1}},
+			style = {color = {1, 1, 1, 1}, size = 24},
 			anchor = .TopLeft,
 		},
 		false,

@@ -23,7 +23,7 @@ allocate_buffer :: proc(
 ) {
 	buf_info := vk.BufferCreateInfo {
 		sType       = .BUFFER_CREATE_INFO,
-		size        = capacity,
+		size        = capacity * size_of(Type),
 		usage       = {Stage},
 		sharingMode = .EXCLUSIVE,
 	}
