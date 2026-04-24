@@ -73,11 +73,12 @@ TextDraw :: struct {
 }
 
 TextRenderer :: struct {
-	atlases:    [dynamic]^Font,
-	text_draws: [dynamic]TextDraw,
-	vertices:   [dynamic]TextVertex,
-	pool:       vk.DescriptorPool,
-	pipeline:   VulkanPipeline(2, TextVertex),
+	atlases:      [dynamic]^Font,
+	text_draws:   [dynamic]TextDraw,
+	vertices:     [dynamic]TextVertex,
+	pool:         vk.DescriptorPool,
+	pipeline:     VulkanPipeline(2, TextVertex),
+	default_size: f32,
 }
 
 // ---------------------------------------------------------------------------
@@ -117,6 +118,7 @@ initialize_text_renderer :: proc(state: ^VulkanState) -> (err: linux.Errno) {
 	t.atlases = make([dynamic]^Font)
 	t.text_draws = make([dynamic]TextDraw)
 	t.vertices = make([dynamic]TextVertex)
+	t.default_size = 16
 
 	pool_size := vk.DescriptorPoolSize {
 		type            = .COMBINED_IMAGE_SAMPLER,
@@ -173,19 +175,26 @@ destroy_text_renderer :: proc(state: ^VulkanState) {
 
 // acquire_atlas returns the cached atlas whose pixel_size is within
 // ATLAS_SIZE_TOLERANCE of size, or loads and caches a new one.
+// A non-zero size also sets the default used when size == 0.
 acquire_atlas :: proc(state: ^VulkanState, size: f32) -> (font: ^Font, err: linux.Errno) {
 	t := &state.text_renderer
+	effective := size
+	if effective == 0 {
+		effective = t.default_size
+	} else {
+		t.default_size = size
+	}
 	best: ^Font
 	best_diff := max(f32)
 	for atlas in t.atlases {
-		diff := abs(atlas.pixel_size - size)
+		diff := abs(atlas.pixel_size - effective)
 		if diff < best_diff {
 			best_diff = diff
 			best = atlas
 		}
 	}
 	if best_diff <= ATLAS_SIZE_TOLERANCE do return best, nil
-	return load_font(state, size)
+	return load_font(state, effective)
 }
 
 load_font :: proc(state: ^VulkanState, pixel_size: f32) -> (font: ^Font, err: linux.Errno) {
