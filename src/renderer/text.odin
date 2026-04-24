@@ -414,54 +414,10 @@ upload_font_atlas :: proc(
 	}
 	vk.BindImageMemory(state.device, font.atlas_image, font.atlas_memory, 0)
 
-	// Staging buffer
-	staging_size := vk.DeviceSize(len(bitmap))
-	staging_buf: vk.Buffer
-	staging_mem: vk.DeviceMemory
-
-	buf_info := vk.BufferCreateInfo {
-		sType       = .BUFFER_CREATE_INFO,
-		size        = staging_size,
-		usage       = {.TRANSFER_SRC},
-		sharingMode = .EXCLUSIVE,
-	}
-	if res := vk.CreateBuffer(state.device, &buf_info, nil, &staging_buf); res != .SUCCESS {
-		fmt.eprintln("text: vkCreateBuffer (staging) failed:", res)
-		return .EINVAL
-	}
-	defer vk.DestroyBuffer(state.device, staging_buf, nil)
-
-	vk.GetBufferMemoryRequirements(state.device, staging_buf, &mem_reqs)
-	stg_type := find_memory_type(
-		state.mem_props,
-		mem_reqs.memoryTypeBits,
-		{.HOST_VISIBLE, .HOST_COHERENT},
-		vk.MemoryPropertyFlags{.HOST_VISIBLE},
-	) or_return
-	stg_alloc := vk.MemoryAllocateInfo {
-		sType           = .MEMORY_ALLOCATE_INFO,
-		allocationSize  = mem_reqs.size,
-		memoryTypeIndex = stg_type,
-	}
-	if res := vk.AllocateMemory(state.device, &stg_alloc, nil, &staging_mem); res != .SUCCESS {
-		fmt.eprintln("text: vkAllocateMemory (staging) failed:", res)
-		return .ENOMEM
-	}
-	defer vk.FreeMemory(state.device, staging_mem, nil)
-	vk.BindBufferMemory(state.device, staging_buf, staging_mem, 0)
-
-	mapped: rawptr
-	vk.MapMemory(state.device, staging_mem, 0, vk.DeviceSize(vk.WHOLE_SIZE), {}, &mapped)
-	mem.copy(mapped, raw_data(bitmap), len(bitmap))
-	flush_range := vk.MappedMemoryRange {
-		sType  = .MAPPED_MEMORY_RANGE,
-		memory = staging_mem,
-		offset = 0,
-		size   = vk.DeviceSize(vk.WHOLE_SIZE),
-	}
-	vk.FlushMappedMemoryRanges(state.device, 1, &flush_range)
-	vk.UnmapMemory(state.device, staging_mem)
-
+	staging_buffer: VulkanBuffer(.TRANSFER_SRC, u8)
+	allocate_buffer(state, &staging_buffer, vk.DeviceSize(len(bitmap)))
+	defer destroy_buffer(state, &staging_buffer)
+	set_buffer_data(state, &staging_buffer, bitmap)
 	// One-time command buffer for upload
 	cmd_alloc := vk.CommandBufferAllocateInfo {
 		sType              = .COMMAND_BUFFER_ALLOCATE_INFO,
@@ -501,7 +457,7 @@ upload_font_atlas :: proc(
 	}
 	vk.CmdCopyBufferToImage(
 		cmd,
-		staging_buf,
+		staging_buffer.buffer,
 		font.atlas_image,
 		.TRANSFER_DST_OPTIMAL,
 		1,
@@ -586,6 +542,9 @@ ensure_text :: proc(state: ^VulkanState) -> linux.Errno {
 		return a.zindex < b.zindex
 	})
 
+	font_char_counts := make(map[^Font]u32)
+	defer delete(font_char_counts)
+
 	for draw in t.text_draws {
 		font := acquire_atlas(state, draw.style.size) or_return
 		if font == nil do continue
@@ -593,13 +552,10 @@ ensure_text :: proc(state: ^VulkanState) -> linux.Errno {
 			t.font_draws[font] = make([dynamic]TextDraw)
 		}
 		append(&t.font_draws[font], draw)
+		font_char_counts[font] += u32(len(draw.text))
 	}
 
-	for font, draws in t.font_draws {
-		total_chars: u32
-		for draw in draws {
-			total_chars += u32(len(draw.text))
-		}
+	for font, total_chars in font_char_counts {
 		font_ensure_buffers(state, font, total_chars) or_return
 	}
 	return nil
