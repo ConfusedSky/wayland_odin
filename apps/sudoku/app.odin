@@ -74,16 +74,25 @@ update :: proc(state: ^State, info: platform.FrameInfo) -> bool {
 	prev_hovered, prev_selected := state.hovered_cell, state.selected_cell
 
 	// Compute hovered cell from pointer position.
-	if state.pointer_x >= grid_x &&
-	   state.pointer_x < grid_x + grid_size &&
-	   state.pointer_y >= grid_y &&
-	   state.pointer_y < grid_y + grid_size {
-		col := clamp(int((state.pointer_x - grid_x) / cell_size), 0, 8)
-		row := clamp(int((state.pointer_y - grid_y) / cell_size), 0, 8)
-		state.hovered_cell = row * 9 + col
-	} else {
-		state.hovered_cell = -1
+	// Check each cell's exact pixel range (accounting for line widths between cells).
+	hovered_col := -1
+	for c in 0 ..< 9 {
+		cx := grid_x + f32(c) * cell_size + cell_offset(c)
+		if state.pointer_x >= cx && state.pointer_x < cx + cell_size {
+			hovered_col = c
+			break
+		}
 	}
+	hovered_row := -1
+	for r in 0 ..< 9 {
+		cy := grid_y + f32(r) * cell_size + cell_offset(r)
+		if state.pointer_y >= cy && state.pointer_y < cy + cell_size {
+			hovered_row = r
+			break
+		}
+	}
+	state.hovered_cell =
+		hovered_row * 9 + hovered_col if hovered_col >= 0 && hovered_row >= 0 else -1
 
 	// Click: select hovered cell; clicking the already-selected cell deselects it.
 	if info.pointer.left_button_pressed {
@@ -155,21 +164,37 @@ render_frame :: proc(
 	return true, nil
 }
 
+// Total pixels consumed by internal grid lines: 2 thick (LINE_WIDTH) + 6 thin (LINE_WIDTH/2).
+total_internal_line_px: f32
+
+@(init)
+init_total_internal_line_px :: proc "contextless" () {
+	total_internal_line_px = 2 * LINE_WIDTH + 6 * (LINE_WIDTH / 2)
+}
+
 grid_geometry :: proc(width, height: u32) -> (grid_x, grid_y, grid_size, cell_size: f32) {
 	window_width := f32(width)
 	window_height := f32(height)
 	square_size := min(window_width, window_height)
 	square_x := (window_width - square_size) / 2
 	square_y := (window_height - square_size) / 2
-	padding: f32 = 10
+	padding: f32 = 20
 	grid_x = square_x + padding
 	grid_y = square_y + padding
 	grid_size = square_size - padding * 2
-	cell_size = grid_size / 9
+	cell_size = (grid_size - total_internal_line_px) / 9
 	return
 }
 
-CELL_INSET :: f32(10)
+// Returns the pixel offset of cell/separator index idx from the grid origin,
+// accounting for the widths of all preceding thin and thick lines.
+cell_offset :: proc(idx: int) -> f32 {
+	thin_before := f32(idx - idx / 3)
+	thick_before := f32(idx / 3)
+	return thin_before * (LINE_WIDTH / 2) + thick_before * LINE_WIDTH
+}
+
+cell_inset_FRACTION :: f32(0.10)
 HOVER_COLOR :: [4]f32{0, 0, 0, 0.15}
 SELECTED_COLOR :: [4]f32{0, 0, 0, 0.3}
 
@@ -178,8 +203,8 @@ draw_grid :: proc(state: ^State, grid_x, grid_y, grid_size, cell_size: f32) {
 		&state.vulkan,
 		renderer.ShapeData {
 			data = renderer.RectData {
-				pos = {grid_x - 1, grid_y - 1},
-				size = {grid_size + 2, grid_size + 2},
+				pos = {grid_x - LINE_WIDTH, grid_y - LINE_WIDTH},
+				size = {grid_size + LINE_WIDTH * 2, grid_size + LINE_WIDTH * 2},
 			},
 			style = renderer.ShapeStyle {
 				border_color = BLACK,
@@ -190,6 +215,7 @@ draw_grid :: proc(state: ^State, grid_x, grid_y, grid_size, cell_size: f32) {
 	)
 
 	// Cell hover and selection overlays — drawn before grid lines so lines render on top.
+	cell_inset := cell_size * cell_inset_FRACTION
 	for row in 0 ..< 9 {
 		for col in 0 ..< 9 {
 			idx := row * 9 + col
@@ -201,15 +227,14 @@ draw_grid :: proc(state: ^State, grid_x, grid_y, grid_size, cell_size: f32) {
 			} else {
 				continue
 			}
+			cx := grid_x + f32(col) * cell_size + cell_offset(col)
+			cy := grid_y + f32(row) * cell_size + cell_offset(row)
 			renderer.draw_shape(
 				&state.vulkan,
 				renderer.ShapeData {
 					data = renderer.RectData {
-						pos = {
-							grid_x + f32(col) * cell_size + CELL_INSET,
-							grid_y + f32(row) * cell_size + CELL_INSET,
-						},
-						size = {cell_size - CELL_INSET * 2, cell_size - CELL_INSET * 2},
+						pos = {cx + cell_inset, cy + cell_inset},
+						size = {cell_size - cell_inset * 2, cell_size - cell_inset * 2},
 					},
 					style = renderer.ShapeStyle{fill_color = color},
 				},
@@ -217,9 +242,12 @@ draw_grid :: proc(state: ^State, grid_x, grid_y, grid_size, cell_size: f32) {
 		}
 	}
 
+	// Thick box lines (separators at i=3 and i=6).
+	// Each starts exactly where the preceding cell ends.
 	for i in 1 ..= 2 {
-		x := grid_x + grid_size * f32(i) / 3 - LINE_WIDTH / 2
-		y := grid_y + grid_size * f32(i) / 3 - LINE_WIDTH / 2
+		sep := i * 3
+		x := grid_x + f32(sep) * cell_size + cell_offset(sep) - LINE_WIDTH
+		y := grid_y + f32(sep) * cell_size + cell_offset(sep) - LINE_WIDTH
 		renderer.draw_shape(
 			&state.vulkan,
 			renderer.ShapeData {
@@ -227,7 +255,6 @@ draw_grid :: proc(state: ^State, grid_x, grid_y, grid_size, cell_size: f32) {
 				style = BLACK_STYLE,
 			},
 		)
-
 		renderer.draw_shape(
 			&state.vulkan,
 			renderer.ShapeData {
@@ -237,11 +264,11 @@ draw_grid :: proc(state: ^State, grid_x, grid_y, grid_size, cell_size: f32) {
 		)
 	}
 
+	// Thin cell lines (all separators except the box ones).
 	for i in 1 ..= 8 {
 		if i % 3 == 0 do continue
-
-		x := grid_x + grid_size * f32(i) / 9 - LINE_WIDTH / 4
-		y := grid_y + grid_size * f32(i) / 9 - LINE_WIDTH / 4
+		x := grid_x + f32(i) * cell_size + cell_offset(i) - LINE_WIDTH / 2
+		y := grid_y + f32(i) * cell_size + cell_offset(i) - LINE_WIDTH / 2
 		renderer.draw_shape(
 			&state.vulkan,
 			renderer.ShapeData {
@@ -249,7 +276,6 @@ draw_grid :: proc(state: ^State, grid_x, grid_y, grid_size, cell_size: f32) {
 				style = BLACK_STYLE,
 			},
 		)
-
 		renderer.draw_shape(
 			&state.vulkan,
 			renderer.ShapeData {
@@ -268,10 +294,9 @@ draw_grid :: proc(state: ^State, grid_x, grid_y, grid_size, cell_size: f32) {
 		for col in 0 ..< 9 {
 			digit := state.board[row * 9 + col]
 			if digit == 0 do continue
-			cell_center := [2]f32 {
-				grid_x + (f32(col) + 0.5) * cell_size,
-				grid_y + (f32(row) + 0.5) * cell_size,
-			}
+			cx := grid_x + f32(col) * cell_size + cell_offset(col)
+			cy := grid_y + f32(row) * cell_size + cell_offset(row)
+			cell_center := [2]f32{cx + cell_size / 2, cy + cell_size / 2}
 			bbox := renderer.get_text_bounding_box_top_left(
 				&state.vulkan,
 				digit_strs[digit],
