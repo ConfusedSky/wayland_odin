@@ -48,6 +48,7 @@ xdg_surface_handlers := xdg_surface.EventHandlers {
 		client := (^Client)(user_data)
 		xdg_surface.ack_configure(&client.xdg_surface, serial) or_return
 		client.surface_state = .ACKED_CONFIGURE
+		client.pending_update = true
 		return nil
 	},
 }

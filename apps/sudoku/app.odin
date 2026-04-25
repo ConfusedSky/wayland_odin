@@ -6,11 +6,9 @@ import "core:sys/linux"
 import "src:constants"
 import "src:platform"
 import "src:renderer"
-import "src:runner"
 import "src:runtime_log"
 
 log_blacklist: []string : {
-	"app.frame.draw",
 	"wayland.request.wl_surface.attach",
 	"wayland.request.wl_surface.damage_buffer",
 	"wayland.request.wl_surface.frame",
@@ -65,44 +63,23 @@ shutdown :: proc(state: ^State) {
 	state.initialized = false
 }
 
-render_frame :: proc(
-	state: ^State,
-	info: platform.FrameInfo,
-) -> (
-	rendered: bool,
-	err: linux.Errno,
-) {
-	assert(state.frame_buf.memory != 0)
-	assert(info.width > 0 && info.height > 0)
+update :: proc(state: ^State, info: platform.FrameInfo) -> bool {
+	should_render := false
 
-	if runtime_log.should_log(state.logger, "app.frame.draw") {
-		fmt.printfln("Drawing next frame")
-	}
+	state.pointer_x = f32(info.pointer.x)
+	state.pointer_y = f32(info.pointer.y)
 
-	if info.width < constants.NUM_CELLS || info.height < constants.NUM_CELLS {
-		fmt.eprintfln("State is too small to safely draw the next frame")
-		return false, nil
-	}
+	grid_x, grid_y, grid_size, cell_size := grid_geometry(info.width, info.height)
 
-	// --- Input ---
+	prev_hovered, prev_selected := state.hovered_cell, state.selected_cell
 
 	// Compute hovered cell from pointer position.
-	window_width := f32(info.width)
-	window_height := f32(info.height)
-	square_size := min(window_width, window_height)
-	square_x := (window_width - square_size) / 2
-	square_y := (window_height - square_size) / 2
-	padding: f32 = 10
-	grid_x := square_x + padding
-	grid_y := square_y + padding
-	grid_size := square_size - padding * 2
-	cell_size := grid_size / 9
-
-	px := f32(info.pointer.x)
-	py := f32(info.pointer.y)
-	if px >= grid_x && px < grid_x + grid_size && py >= grid_y && py < grid_y + grid_size {
-		col := clamp(int((px - grid_x) / cell_size), 0, 8)
-		row := clamp(int((py - grid_y) / cell_size), 0, 8)
+	if state.pointer_x >= grid_x &&
+	   state.pointer_x < grid_x + grid_size &&
+	   state.pointer_y >= grid_y &&
+	   state.pointer_y < grid_y + grid_size {
+		col := clamp(int((state.pointer_x - grid_x) / cell_size), 0, 8)
+		row := clamp(int((state.pointer_y - grid_y) / cell_size), 0, 8)
 		state.hovered_cell = row * 9 + col
 	} else {
 		state.hovered_cell = -1
@@ -117,27 +94,56 @@ render_frame :: proc(
 		}
 	}
 
+	if prev_hovered != state.hovered_cell || prev_selected != state.selected_cell do should_render = true
+
 	// Digit keys: 1-9 fill selected cell; 0/Backspace/Delete clears it.
 	if state.selected_cell >= 0 {
 		for i in 0 ..< int(info.keyboard.n_keys) {
 			key := info.keyboard.keys_pressed[i]
 			if key >= 2 && key <= 10 {
 				state.board[state.selected_cell] = int(key) - 1
+				should_render = true
 			} else if key == 11 || key == 14 || key == 111 {
 				// KEY_0, KEY_BACKSPACE, KEY_DELETE
 				state.board[state.selected_cell] = 0
+				should_render = true
 			}
 		}
 	}
+
+	return should_render
+}
+
+render_frame :: proc(
+	state: ^State,
+	width: u32,
+	height: u32,
+) -> (
+	rendered: bool,
+	err: linux.Errno,
+) {
+	assert(state.frame_buf.memory != 0)
+	assert(width > 0 && height > 0)
+
+	if runtime_log.should_log(state.logger, "app.frame.draw") {
+		fmt.printfln("Drawing next frame")
+	}
+
+	if width < constants.NUM_CELLS || height < constants.NUM_CELLS {
+		fmt.eprintfln("State is too small to safely draw the next frame")
+		return false, nil
+	}
+
+	grid_x, grid_y, grid_size, cell_size := grid_geometry(width, height)
 
 	renderer.start_frame(
 		&state.vulkan,
 		&state.frame_buf,
 		renderer.RenderParams {
-			width = info.width,
-			height = info.height,
-			pointer_x = f32(info.pointer.x),
-			pointer_y = f32(info.pointer.y),
+			width = width,
+			height = height,
+			pointer_x = state.pointer_x,
+			pointer_y = state.pointer_y,
 			bg_color = GRAY,
 		},
 	) or_return
@@ -147,6 +153,20 @@ render_frame :: proc(
 	renderer.end_frame(&state.vulkan) or_return
 
 	return true, nil
+}
+
+grid_geometry :: proc(width, height: u32) -> (grid_x, grid_y, grid_size, cell_size: f32) {
+	window_width := f32(width)
+	window_height := f32(height)
+	square_size := min(window_width, window_height)
+	square_x := (window_width - square_size) / 2
+	square_y := (window_height - square_size) / 2
+	padding: f32 = 10
+	grid_x = square_x + padding
+	grid_y = square_y + padding
+	grid_size = square_size - padding * 2
+	cell_size = grid_size / 9
+	return
 }
 
 CELL_INSET :: f32(10)
@@ -283,16 +303,21 @@ on_init :: proc(
 	return initialize((^State)(user_data), logger, max_width, max_height)
 }
 
+on_update :: proc(user_data: rawptr, info: platform.FrameInfo) -> bool {
+	return update((^State)(user_data), info)
+}
+
 on_frame :: proc(
 	user_data: rawptr,
-	info: platform.FrameInfo,
+	width: u32,
+	height: u32,
 ) -> (
 	frame_buf: ^renderer.VulkanFrameBuffer,
 	err: linux.Errno,
 ) {
 	state := (^State)(user_data)
 	rendered: bool
-	rendered, err = render_frame(state, info)
+	rendered, err = render_frame(state, width, height)
 	if err != nil || !rendered {
 		return nil, err
 	}

@@ -35,6 +35,7 @@ Client :: struct {
 	wl_pointer:       wl_pointer.t,
 	pointer:          ptypes.Pointer,
 	keyboard:         ptypes.Keyboard,
+	pending_update:   bool,
 	wl_shm:           wl_shm.t,
 	zwp_linux_dmabuf: zwp_linux_dmabuf_v1.t,
 	wl_buffer:        wl_buffer.t,
@@ -157,6 +158,16 @@ should_close :: proc(client: ^Client) -> bool {
 
 ready_for_frame :: proc(client: ^Client) -> bool {
 	return client.buffer_ready && client.surface_state == .ACKED_CONFIGURE
+}
+
+pending_update :: proc(client: ^Client) -> bool {
+	result := client.pending_update
+	client.pending_update = false
+	return result
+}
+
+surface_size :: proc(client: ^Client) -> (u32, u32) {
+	return client.width, client.height
 }
 
 consume_frame_info :: proc(client: ^Client) -> ptypes.FrameInfo {

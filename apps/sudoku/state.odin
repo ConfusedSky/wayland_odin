@@ -11,4 +11,6 @@ State :: struct {
 	board:         [81]int,
 	selected_cell: int,
 	hovered_cell:  int,
+	pointer_x:     f32,
+	pointer_y:     f32,
 }

@@ -54,36 +54,42 @@ shutdown :: proc(state: ^State) {
 	state.initialized = false
 }
 
+update :: proc(state: ^State, info: platform.FrameInfo) -> bool {
+	state.pointer_x = f32(info.pointer.x)
+	state.pointer_y = f32(info.pointer.y)
+	update_drag(state, info)
+	layout_scene(state, info)
+	return true
+}
+
 render_frame :: proc(
 	state: ^State,
-	info: platform.FrameInfo,
+	width: u32,
+	height: u32,
 ) -> (
 	rendered: bool,
 	err: linux.Errno,
 ) {
 	assert(state.frame_buf.memory != 0)
-	assert(info.width > 0 && info.height > 0)
+	assert(width > 0 && height > 0)
 
 	if runtime_log.should_log(state.logger, "app.frame.draw") {
 		fmt.printfln("Drawing next frame")
 	}
 
-	if info.width < constants.NUM_CELLS || info.height < constants.NUM_CELLS {
+	if width < constants.NUM_CELLS || height < constants.NUM_CELLS {
 		fmt.eprintfln("State is too small to safely draw the next frame")
 		return false, nil
 	}
-
-	update_drag(state, info)
-	layout_scene(state, info)
 
 	renderer.start_frame(
 		&state.vulkan,
 		&state.frame_buf,
 		renderer.RenderParams {
-			width = info.width,
-			height = info.height,
-			pointer_x = f32(info.pointer.x),
-			pointer_y = f32(info.pointer.y),
+			width = width,
+			height = height,
+			pointer_x = state.pointer_x,
+			pointer_y = state.pointer_y,
 			bg_color = {0, 0, 0, 1},
 		},
 	) or_return
@@ -434,16 +440,21 @@ on_init :: proc(
 	return initialize((^State)(user_data), logger, max_width, max_height)
 }
 
+on_update :: proc(user_data: rawptr, info: platform.FrameInfo) -> bool {
+	return update((^State)(user_data), info)
+}
+
 on_frame :: proc(
 	user_data: rawptr,
-	info: platform.FrameInfo,
+	width: u32,
+	height: u32,
 ) -> (
 	frame_buf: ^renderer.VulkanFrameBuffer,
 	err: linux.Errno,
 ) {
 	state := (^State)(user_data)
 	rendered: bool
-	rendered, err = render_frame(state, info)
+	rendered, err = render_frame(state, width, height)
 	if err != nil || !rendered {
 		return nil, err
 	}

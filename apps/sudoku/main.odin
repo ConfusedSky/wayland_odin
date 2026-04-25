@@ -14,6 +14,7 @@ main :: proc() {
 			log_blacklist = log_blacklist,
 			user_data = &state,
 			on_init = on_init,
+			on_update = on_update,
 			on_frame = on_frame,
 			on_shutdown = on_shutdown,
 		},

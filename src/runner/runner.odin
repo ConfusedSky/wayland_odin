@@ -13,13 +13,20 @@ OnInit :: proc(
 	max_width: u32,
 	max_height: u32,
 ) -> linux.Errno
+
+// OnUpdate is called whenever input arrives (pointer, keyboard, resize).
+// Returns true if the updated state requires a new frame to be rendered.
+OnUpdate :: proc(user_data: rawptr, info: platform.FrameInfo) -> bool
+
 OnFrame :: proc(
 	user_data: rawptr,
-	info: platform.FrameInfo,
+	width: u32,
+	height: u32,
 ) -> (
 	frame_buf: ^renderer.VulkanFrameBuffer,
 	err: linux.Errno,
 )
+
 OnShutdown :: proc(user_data: rawptr)
 
 AppConfig :: struct {
@@ -29,18 +36,21 @@ AppConfig :: struct {
 	log_blacklist: []string,
 	user_data:     rawptr,
 	on_init:       OnInit,
+	on_update:     OnUpdate,
 	on_frame:      OnFrame,
 	on_shutdown:   OnShutdown,
 }
 
 _running: bool
 _platform_ctx: ^platform.Context
-_request_next_frame: bool
 
-// request_frame schedules an additional render after the current frame is presented.
-// Safe to call from on_frame callbacks.
+// request_frame schedules a render on the next compositor callback.
+// For use outside of on_update (e.g. timers). Prefer returning true from
+// on_update for normal input-driven redraws.
 request_frame :: proc() {
-	_request_next_frame = true
+	if _platform_ctx != nil {
+		platform.request_frame(_platform_ctx)
+	}
 }
 
 _handle_signal :: proc "c" (sig: posix.Signal) {
@@ -92,19 +102,22 @@ run :: proc(config: AppConfig) -> linux.Errno {
 			}
 		}
 
+		if initialized && platform.pending_update(&ctx) {
+			info := platform.consume_frame_info(&ctx)
+			if config.on_update(config.user_data, info) {
+				platform.request_frame(&ctx)
+			}
+		}
+
 		if !initialized || !platform.ready_for_frame(&ctx) {
 			continue
 		}
 
-		info := platform.consume_frame_info(&ctx)
-		frame_buf, frame_err := config.on_frame(config.user_data, info)
+		width, height := platform.surface_size(&ctx)
+		frame_buf, frame_err := config.on_frame(config.user_data, width, height)
 		if frame_err != nil do return frame_err
 		if frame_buf != nil {
 			platform.present_dmabuf(&ctx, frame_buf) or_return
-			if _request_next_frame {
-				_request_next_frame = false
-				platform.request_frame(&ctx)
-			}
 		} else {
 			platform.skip_frame(&ctx)
 		}

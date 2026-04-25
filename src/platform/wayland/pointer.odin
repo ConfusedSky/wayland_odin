@@ -112,7 +112,7 @@ wl_pointer_handlers := wl_pointer.EventHandlers {
 		client := (^Client)(user_data)
 		client.pointer.x = surface_x
 		client.pointer.y = surface_y
-		trigger_redraw(client)
+		client.pending_update = true
 		return nil
 	},
 	on_button = proc(
@@ -135,7 +135,7 @@ wl_pointer_handlers := wl_pointer.EventHandlers {
 		if !is_pressed && was_down {
 			client.pointer.left_button_released = true
 		}
-		trigger_redraw(client)
+		client.pending_update = true
 		return nil
 	},
 }

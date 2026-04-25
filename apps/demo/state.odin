@@ -28,4 +28,6 @@ State :: struct {
 	drag:        DragState,
 	next_id:     int,
 	initialized: bool,
+	pointer_x:   f32,
+	pointer_y:   f32,
 }

@@ -17,7 +17,7 @@ wl_keyboard_handlers := wl_keyboard.EventHandlers {
 		if state == .Pressed && client.keyboard.n_keys < 16 {
 			client.keyboard.keys_pressed[client.keyboard.n_keys] = key
 			client.keyboard.n_keys += 1
-			trigger_redraw(client)
+			client.pending_update = true
 		}
 		return nil
 	},

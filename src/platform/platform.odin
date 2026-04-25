@@ -51,6 +51,14 @@ request_frame :: proc(ctx: ^Context) {
 	impl.request_frame(&ctx.impl)
 }
 
+pending_update :: proc(ctx: ^Context) -> bool {
+	return impl.pending_update(&ctx.impl)
+}
+
+surface_size :: proc(ctx: ^Context) -> (u32, u32) {
+	return impl.surface_size(&ctx.impl)
+}
+
 shutdown :: proc(ctx: ^Context) -> Errno {
 	return impl.shutdown(&ctx.impl)
 }
