@@ -1,7 +1,6 @@
 package demo
 
 import "core:fmt"
-import "core:math/rand"
 import "core:sys/linux"
 
 import "src:constants"
@@ -49,9 +48,8 @@ initialize :: proc(
 	frame_buf, err := renderer.allocate_frame_buffer(&state.vulkan, max_width, max_height)
 	if err != nil do return err
 	state.frame_buf = frame_buf
-	for i in 0 ..< 81 {
-		state.board[i] = rand.int_max(9) + 1
-	}
+	state.selected_cell = -1
+	state.hovered_cell = -1
 
 	state.initialized = true
 	return nil
@@ -85,6 +83,51 @@ render_frame :: proc(
 		return false, nil
 	}
 
+	// --- Input ---
+
+	// Compute hovered cell from pointer position.
+	window_width := f32(info.width)
+	window_height := f32(info.height)
+	square_size := min(window_width, window_height)
+	square_x := (window_width - square_size) / 2
+	square_y := (window_height - square_size) / 2
+	padding: f32 = 10
+	grid_x := square_x + padding
+	grid_y := square_y + padding
+	grid_size := square_size - padding * 2
+	cell_size := grid_size / 9
+
+	px := f32(info.pointer.x)
+	py := f32(info.pointer.y)
+	if px >= grid_x && px < grid_x + grid_size && py >= grid_y && py < grid_y + grid_size {
+		col := clamp(int((px - grid_x) / cell_size), 0, 8)
+		row := clamp(int((py - grid_y) / cell_size), 0, 8)
+		state.hovered_cell = row * 9 + col
+	} else {
+		state.hovered_cell = -1
+	}
+
+	// Click: select hovered cell; clicking the already-selected cell deselects it.
+	if info.pointer.left_button_pressed {
+		if state.hovered_cell == state.selected_cell {
+			state.selected_cell = -1
+		} else {
+			state.selected_cell = state.hovered_cell
+		}
+	}
+
+	// Digit keys: 1-9 fill selected cell; 0/Backspace/Delete clears it.
+	if state.selected_cell >= 0 {
+		for i in 0 ..< int(info.keyboard.n_keys) {
+			key := info.keyboard.keys_pressed[i]
+			if key >= 2 && key <= 10 {
+				state.board[state.selected_cell] = int(key) - 1
+			} else if key == 11 || key == 14 || key == 111 {
+				// KEY_0, KEY_BACKSPACE, KEY_DELETE
+				state.board[state.selected_cell] = 0
+			}
+		}
+	}
 
 	renderer.start_frame(
 		&state.vulkan,
@@ -98,24 +141,18 @@ render_frame :: proc(
 		},
 	) or_return
 
-	draw_grid(state, info)
+	draw_grid(state, grid_x, grid_y, grid_size, cell_size)
 
 	renderer.end_frame(&state.vulkan) or_return
 
 	return true, nil
 }
 
-draw_grid :: proc(state: ^State, info: platform.FrameInfo) {
-	window_width := f32(info.width)
-	window_height := f32(info.height)
-	square_size := min(window_width, window_height)
-	square_x := (window_width - square_size) / 2
-	square_y := (window_height - square_size) / 2
-	padding: f32 = 10
-	grid_x := square_x + padding
-	grid_y := square_y + padding
-	grid_size := square_size - padding * 2
+CELL_INSET :: f32(10)
+HOVER_COLOR :: [4]f32{0, 0, 0, 0.15}
+SELECTED_COLOR :: [4]f32{0, 0, 0, 0.3}
 
+draw_grid :: proc(state: ^State, grid_x, grid_y, grid_size, cell_size: f32) {
 	renderer.draw_shape(
 		&state.vulkan,
 		renderer.ShapeData {
@@ -130,6 +167,34 @@ draw_grid :: proc(state: ^State, info: platform.FrameInfo) {
 			},
 		},
 	)
+
+	// Cell hover and selection overlays — drawn before grid lines so lines render on top.
+	for row in 0 ..< 9 {
+		for col in 0 ..< 9 {
+			idx := row * 9 + col
+			color: [4]f32
+			if idx == state.selected_cell {
+				color = SELECTED_COLOR
+			} else if idx == state.hovered_cell {
+				color = HOVER_COLOR
+			} else {
+				continue
+			}
+			renderer.draw_shape(
+				&state.vulkan,
+				renderer.ShapeData {
+					data = renderer.RectData {
+						pos = {
+							grid_x + f32(col) * cell_size + CELL_INSET,
+							grid_y + f32(row) * cell_size + CELL_INSET,
+						},
+						size = {cell_size - CELL_INSET * 2, cell_size - CELL_INSET * 2},
+					},
+					style = renderer.ShapeStyle{fill_color = color},
+				},
+			)
+		}
+	}
 
 	for i in 1 ..= 2 {
 		x := grid_x + grid_size * f32(i) / 3 - LINE_WIDTH / 2
@@ -173,27 +238,27 @@ draw_grid :: proc(state: ^State, info: platform.FrameInfo) {
 		)
 	}
 
-	cell_size := grid_size / 9
 	digit_style := renderer.TextStyle {
 		color = BLACK,
 		size  = cell_size * 0.65,
 	}
-	digit_strs := [10]string{"0", "1", "2", "3", "4", "5", "6", "7", "8", "9"}
+	digit_strs := [10]string{"", "1", "2", "3", "4", "5", "6", "7", "8", "9"}
 	for row in 0 ..< 9 {
 		for col in 0 ..< 9 {
-			digit_str := digit_strs[state.board[row * 9 + col]]
+			digit := state.board[row * 9 + col]
+			if digit == 0 do continue
 			cell_center := [2]f32 {
 				grid_x + (f32(col) + 0.5) * cell_size,
 				grid_y + (f32(row) + 0.5) * cell_size,
 			}
 			bbox := renderer.get_text_bounding_box_top_left(
 				&state.vulkan,
-				digit_str,
+				digit_strs[digit],
 				{0, 0},
 				digit_style,
 			)
 			pos := [2]f32{cell_center.x - bbox.size.x / 2, cell_center.y - bbox.size.y / 2}
-			renderer.draw_text_top_left(&state.vulkan, digit_str, pos, digit_style)
+			renderer.draw_text_top_left(&state.vulkan, digit_strs[digit], pos, digit_style)
 		}
 	}
 }

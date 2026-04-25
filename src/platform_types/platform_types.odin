@@ -10,9 +10,15 @@ InitParams :: struct {
 }
 
 FrameInfo :: struct {
-	width:   u32,
-	height:  u32,
-	pointer: Pointer,
+	width:    u32,
+	height:   u32,
+	pointer:  Pointer,
+	keyboard: Keyboard,
+}
+
+Keyboard :: struct {
+	keys_pressed: [16]u32, // evdev keycodes pressed this frame
+	n_keys:       u32,
 }
 
 Pointer :: struct {

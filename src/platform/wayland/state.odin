@@ -34,6 +34,7 @@ Client :: struct {
 	wl_keyboard:      wl_keyboard.t,
 	wl_pointer:       wl_pointer.t,
 	pointer:          ptypes.Pointer,
+	keyboard:         ptypes.Keyboard,
 	wl_shm:           wl_shm.t,
 	zwp_linux_dmabuf: zwp_linux_dmabuf_v1.t,
 	wl_buffer:        wl_buffer.t,
@@ -160,12 +161,14 @@ ready_for_frame :: proc(client: ^Client) -> bool {
 
 consume_frame_info :: proc(client: ^Client) -> ptypes.FrameInfo {
 	info := ptypes.FrameInfo {
-		width   = client.width,
-		height  = client.height,
-		pointer = client.pointer,
+		width    = client.width,
+		height   = client.height,
+		pointer  = client.pointer,
+		keyboard = client.keyboard,
 	}
 	client.pointer.left_button_pressed = false
 	client.pointer.left_button_released = false
+	client.keyboard.n_keys = 0
 	return info
 }
 
