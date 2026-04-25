@@ -148,6 +148,26 @@ initialize_buffer :: proc(
 	return nil
 }
 
+request_frame :: proc(client: ^Client) -> Errno {
+	if client.surface_state != .ATTACHED do return nil
+	client.surface_state = .ACKED_CONFIGURE
+	if client.buffer_ready {
+		// No frame callback is in flight — register one now so the compositor
+		// signals us when to render, rather than busy-polling.
+		frame_cb := wl_surface.frame(&client.wl_surface) or_return
+		wl_callback_handlers.logger = client.logger
+		register_event_handler(
+			client,
+			frame_cb.id,
+			&wl_callback_handlers,
+			wl_callback.handle_event,
+		)
+		client.buffer_ready = false
+		wl_surface.commit(&client.wl_surface) or_return
+	}
+	return nil
+}
+
 present_dmabuf :: proc(client: ^Client, buf: ^renderer.VulkanFrameBuffer) -> Errno {
 	assert(client.wl_surface.id != 0)
 	assert(client.xdg_surface.id != 0)

@@ -34,6 +34,14 @@ AppConfig :: struct {
 }
 
 _running: bool
+_platform_ctx: ^platform.Context
+_request_next_frame: bool
+
+// request_frame schedules an additional render after the current frame is presented.
+// Safe to call from on_frame callbacks.
+request_frame :: proc() {
+	_request_next_frame = true
+}
 
 _handle_signal :: proc "c" (sig: posix.Signal) {
 	#partial switch sig {
@@ -55,6 +63,8 @@ run :: proc(config: AppConfig) -> linux.Errno {
 	defer runtime_log.cleanup(&logger)
 
 	ctx: platform.Context
+	_platform_ctx = &ctx
+	defer _platform_ctx = nil
 	platform.init(
 		&ctx,
 		platform.InitParams {
@@ -91,6 +101,10 @@ run :: proc(config: AppConfig) -> linux.Errno {
 		if frame_err != nil do return frame_err
 		if frame_buf != nil {
 			platform.present_dmabuf(&ctx, frame_buf) or_return
+			if _request_next_frame {
+				_request_next_frame = false
+				platform.request_frame(&ctx)
+			}
 		} else {
 			platform.skip_frame(&ctx)
 		}

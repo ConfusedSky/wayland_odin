@@ -6,6 +6,7 @@ import "core:sys/linux"
 import "src:constants"
 import "src:platform"
 import "src:renderer"
+import "src:runner"
 import "src:runtime_log"
 
 log_blacklist: []string : {

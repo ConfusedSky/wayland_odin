@@ -47,6 +47,10 @@ skip_frame :: proc(ctx: ^Context) {
 	impl.skip_frame(&ctx.impl)
 }
 
+request_frame :: proc(ctx: ^Context) {
+	impl.request_frame(&ctx.impl)
+}
+
 shutdown :: proc(ctx: ^Context) -> Errno {
 	return impl.shutdown(&ctx.impl)
 }
