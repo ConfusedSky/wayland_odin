@@ -105,18 +105,41 @@ update :: proc(state: ^State, info: platform.FrameInfo) -> bool {
 
 	if prev_hovered != state.hovered_cell || prev_selected != state.selected_cell do should_render = true
 
-	// Digit keys: 1-9 fill selected cell; 0/Backspace/Delete clears it.
-	if state.selected_cell >= 0 {
-		for i in 0 ..< int(info.keyboard.n_keys) {
-			key := info.keyboard.keys_pressed[i]
-			if key >= 2 && key <= 10 {
+	// Digit keys: 1-9 fill selected cell; 0/Backspace/Delete clears it. Arrow keys move selection.
+	for i in 0 ..< int(info.keyboard.n_keys) {
+		key := info.keyboard.keys_pressed[i]
+		switch key {
+		case 2 ..= 10:
+			if state.selected_cell >= 0 {
 				state.board[state.selected_cell] = int(key) - 1
 				should_render = true
-			} else if key == 11 || key == 14 || key == 111 {
-				// KEY_0, KEY_BACKSPACE, KEY_DELETE
+			}
+		case 11, 14, 111:
+			// KEY_0, KEY_BACKSPACE, KEY_DELETE
+			if state.selected_cell >= 0 {
 				state.board[state.selected_cell] = 0
 				should_render = true
 			}
+		case 103, 105, 106, 108:
+			// KEY_UP=103, KEY_LEFT=105, KEY_RIGHT=106, KEY_DOWN=108
+			if state.selected_cell < 0 {
+				state.selected_cell = 0
+			} else {
+				row := state.selected_cell / 9
+				col := state.selected_cell % 9
+				switch key {
+				case 103:
+					row = max(0, row - 1)
+				case 108:
+					row = min(8, row + 1)
+				case 105:
+					col = max(0, col - 1)
+				case 106:
+					col = min(8, col + 1)
+				}
+				state.selected_cell = row * 9 + col
+			}
+			should_render = true
 		}
 	}
 
