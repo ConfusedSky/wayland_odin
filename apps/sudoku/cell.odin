@@ -44,6 +44,8 @@ CELL_HOVER_COLOR :: [4]f32{0, 0, 0, 0.15}
 CELL_SELECTED_COLOR :: [4]f32{0, 0, 0, 0.3}
 CELL_GROUP_CONFLICT_COLOR :: [4]f32{1, 0, 0, 0.15}
 CELL_CONFLICT_COLOR :: [4]f32{1, 0, 0, 0.5}
+CELL_SELECTION_GROUP_COLOR :: [4]f32{0, 0.5, 1, 0.2}
+CELL_SAME_DIGIT_COLOR :: [4]f32{0, 0.5, 1, 0.4}
 CELL_DIGIT_SIZE_FRACTION :: f32(0.65)
 
 @(private = "file")
@@ -81,6 +83,7 @@ render_sudoku_cell :: proc(
 	col := cell.cell_index % 9
 	box := (row / 3) * 3 + (col / 3)
 
+
 	if cell.state.conflicted_cells[cell.cell_index] {
 		renderer.draw_shape(
 			state,
@@ -99,6 +102,31 @@ render_sudoku_cell :: proc(
 				style = renderer.ShapeStyle{fill_color = CELL_GROUP_CONFLICT_COLOR},
 			},
 		)
+	} else if cell.state.selected_cell >= 0 {
+		sel := cell.state.selected_cell
+		sel_row := sel / 9
+		sel_col := sel % 9
+		sel_box := (sel_row / 3) * 3 + (sel_col / 3)
+		sel_digit := cell.state.board[sel]
+		in_group := row == sel_row || col == sel_col || box == sel_box
+		same_digit := sel_digit != 0 && cell.state.board[cell.cell_index] == sel_digit
+		if same_digit {
+			renderer.draw_shape(
+				state,
+				renderer.ShapeData {
+					data = renderer.RectData{pos = bbox.pos, size = bbox.size},
+					style = renderer.ShapeStyle{fill_color = CELL_SAME_DIGIT_COLOR},
+				},
+			)
+		} else if in_group {
+			renderer.draw_shape(
+				state,
+				renderer.ShapeData {
+					data = renderer.RectData{pos = bbox.pos, size = bbox.size},
+					style = renderer.ShapeStyle{fill_color = CELL_SELECTION_GROUP_COLOR},
+				},
+			)
+		}
 	}
 
 	color: [4]f32
