@@ -2,43 +2,63 @@ package component
 
 import renderer "../renderer"
 
-Grid :: struct(N: int) {
+Grid :: struct {
+	cells:            [][]Component,
 	zindex:           f32,
-	cells:            [N][N]Component,
 	has_border:       bool,
 	line_width:       f32,
 	line_color:       [4]f32,
 	background_color: [4]f32,
 }
 
-make_grid_vtable :: proc($N: int) -> ComponentVTable {
-	return ComponentVTable {
-		update = nil,
-		render = proc(this_ptr: rawptr, state: ^renderer.VulkanState, cinfo: ComponentInfo) {
-			_render_grid((^Grid(N))(this_ptr), state, cinfo)
-		},
-		destroy = proc(this_ptr: rawptr) {
-			grid := (^Grid(N))(this_ptr)
-			for row in 0 ..< N {
-				for col in 0 ..< N {
-					if child := &grid.cells[row][col]; child.ctx != nil {
-						destroy(child)
-					}
-				}
-			}
-		},
+make_grid :: proc(n: int) -> ^Grid {
+	grid := new(Grid)
+	grid.cells = make([][]Component, n)
+	for i in 0 ..< n {
+		grid.cells[i] = make([]Component, n)
 	}
+	return grid
 }
 
-// Ownership is passed to the component therefore it is responsible for
-// destroying the grid
-grid_into_component :: proc(grid: ^Grid($N), component: ^Component) {
-	component.vtable = make_grid_vtable(N)
-	component.type = typeid_of(Grid(N))
+@(private = "file")
+grid_vtable :: ComponentVTable {
+	update = nil,
+	render = proc(this_ptr: rawptr, state: ^renderer.VulkanState, cinfo: ComponentInfo) {
+		render_grid((^Grid)(this_ptr), state, cinfo)
+	},
+	destroy = proc(this_ptr: rawptr) {
+		grid := (^Grid)(this_ptr)
+		for row in 0 ..< len(grid.cells) {
+			for col in 0 ..< len(grid.cells[row]) {
+				if child := &grid.cells[row][col]; child.ctx != nil {
+					destroy(child)
+				}
+			}
+		}
+		for row in grid.cells {
+			delete(row)
+		}
+		delete(grid.cells)
+	},
+}
+
+// Ownership is passed to the component; it is responsible for destroying the grid.
+grid_into_component :: proc(grid: ^Grid, component: ^Component) {
+	component.vtable = grid_vtable
+	component.type = Grid
 	component.ctx = grid
 }
 
-_render_grid :: proc(grid: ^Grid($N), state: ^renderer.VulkanState, cinfo: ComponentInfo) {
+grid_from_component :: proc(component: ^Component) -> (^Grid, bool) {
+	if (component.type == Grid) {
+		return (^Grid)(component.ctx), true
+	}
+	return nil, false
+}
+
+@(private = "file")
+render_grid :: proc(grid: ^Grid, state: ^renderer.VulkanState, cinfo: ComponentInfo) {
+	n := len(grid.cells)
 	bbox := cinfo.bbox
 
 	border_offset: f32 = grid.line_width if grid.has_border else 0
@@ -46,8 +66,8 @@ _render_grid :: proc(grid: ^Grid($N), state: ^renderer.VulkanState, cinfo: Compo
 	origin_y := bbox.pos.y + border_offset
 	available_w := bbox.size.x - 2 * border_offset
 	available_h := bbox.size.y - 2 * border_offset
-	cell_w := (available_w - f32(N - 1) * grid.line_width) / f32(N)
-	cell_h := (available_h - f32(N - 1) * grid.line_width) / f32(N)
+	cell_w := (available_w - f32(n - 1) * grid.line_width) / f32(n)
+	cell_h := (available_h - f32(n - 1) * grid.line_width) / f32(n)
 
 	renderer.draw_shape(
 		state,
@@ -69,7 +89,7 @@ _render_grid :: proc(grid: ^Grid($N), state: ^renderer.VulkanState, cinfo: Compo
 		zindex = grid.zindex,
 	}
 
-	for i in 0 ..< N - 1 {
+	for i in 0 ..< n - 1 {
 		sep := f32(i + 1) * cell_w + f32(i) * grid.line_width
 		renderer.draw_shape(
 			state,
@@ -96,8 +116,8 @@ _render_grid :: proc(grid: ^Grid($N), state: ^renderer.VulkanState, cinfo: Compo
 		)
 	}
 
-	for row in 0 ..< N {
-		for col in 0 ..< N {
+	for row in 0 ..< n {
+		for col in 0 ..< n {
 			if child := &grid.cells[row][col]; child.ctx != nil {
 				cx := origin_x + f32(col) * (cell_w + grid.line_width)
 				cy := origin_y + f32(row) * (cell_h + grid.line_width)

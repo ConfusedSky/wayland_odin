@@ -38,22 +38,18 @@ initialize :: proc(
 	if err != nil do return err
 	state.frame_buf = frame_buf
 
-	grid := new(component.Grid(3))
-	grid^ = {
-		has_border       = true,
-		line_width       = 4,
-		line_color       = {0, 0, 0, 1},
-		background_color = {1, 1, 1, 1},
-	}
+	grid := component.make_grid(3)
+	grid.has_border = true
+	grid.line_width = 4
+	grid.line_color = {0, 0, 0, 1}
+	grid.background_color = {1, 1, 1, 1}
 	component.grid_into_component(grid, &state.grid_component)
 
 	for y in 0 ..= 2 {
 		for x in 0 ..= 2 {
-			subgrid := new(component.Grid(3))
-			subgrid^ = component.Grid(3) {
-				line_width = 2,
-				line_color = {0, 0, 0, 1},
-			}
+			subgrid := component.make_grid(3)
+			subgrid.line_width = 2
+			subgrid.line_color = {0, 0, 0, 1}
 			component.grid_into_component(subgrid, &grid.cells[y][x])
 		}
 	}
