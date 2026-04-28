@@ -83,7 +83,12 @@ shutdown :: proc(state: ^State) {
 }
 
 update :: proc(state: ^State, info: platform.FrameInfo) -> bool {
-	return component.update(&state.grid_component, grid_cinfo(info.width, info.height), info)
+	cinfo := grid_cinfo(info.width, info.height)
+	cinfo.contains_mouse = rect.contains_point(
+		cinfo.bbox,
+		{f32(info.pointer.x), f32(info.pointer.y)},
+	)
+	return component.update(&state.grid_component, cinfo, info)
 }
 
 render_frame :: proc(

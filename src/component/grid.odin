@@ -83,13 +83,25 @@ update_grid :: proc(grid: ^Grid, cinfo: ComponentInfo, finfo: platform.FrameInfo
 	n := len(grid.cells)
 	origin_x, origin_y, _, _, cell_w, cell_h := grid_cell_layout(grid, cinfo.bbox)
 	dirty := false
+	pointer := [2]f32{f32(finfo.pointer.x), f32(finfo.pointer.y)}
+	mouse_found := false
 	for row in 0 ..< n {
 		for col in 0 ..< n {
 			if child := &grid.cells[row][col]; child.ctx != nil {
 				cx := origin_x + f32(col) * (cell_w + grid.line_width)
 				cy := origin_y + f32(row) * (cell_h + grid.line_width)
+				child_bbox := rect.Rect {
+					pos  = {cx, cy},
+					size = {cell_w, cell_h},
+				}
+				child_contains_mouse := false
+				if cinfo.contains_mouse && !mouse_found {
+					child_contains_mouse = rect.contains_point(child_bbox, pointer)
+					if child_contains_mouse do mouse_found = true
+				}
 				child_cinfo := ComponentInfo {
-					bbox = rect.Rect{pos = {cx, cy}, size = {cell_w, cell_h}},
+					bbox           = child_bbox,
+					contains_mouse = child_contains_mouse,
 				}
 				if update(child, child_cinfo, finfo) do dirty = true
 			}

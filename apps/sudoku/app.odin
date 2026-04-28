@@ -198,8 +198,12 @@ update :: proc(state: ^State, info: platform.FrameInfo) -> bool {
 
 	prev_hovered := state.hovered_cell
 	state.hovered_cell = -1
-	dirty =
-		component.update(&state.grid_component, grid_cinfo(info.width, info.height), info) || dirty
+	cinfo := grid_cinfo(info.width, info.height)
+	cinfo.contains_mouse = rect.contains_point(
+		cinfo.bbox,
+		{f32(info.pointer.x), f32(info.pointer.y)},
+	)
+	dirty = component.update(&state.grid_component, cinfo, info) || dirty
 	return dirty || state.hovered_cell != prev_hovered
 }
 

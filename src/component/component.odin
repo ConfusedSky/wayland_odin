@@ -5,7 +5,8 @@ import rect "../rect"
 import renderer "../renderer"
 
 ComponentInfo :: struct {
-	bbox: rect.Rect,
+	bbox:           rect.Rect,
+	contains_mouse: bool,
 }
 
 UpdateProc :: proc(this_ptr: rawptr, cinfo: ComponentInfo, finfo: platform.FrameInfo) -> bool

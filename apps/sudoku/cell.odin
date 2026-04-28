@@ -2,7 +2,6 @@ package demo
 
 import component "src:component"
 import platform "src:platform"
-import rect "src:rect"
 import renderer "src:renderer"
 
 SudokuCell :: struct {
@@ -54,22 +53,17 @@ update_sudoku_cell :: proc(
 	finfo: platform.FrameInfo,
 ) -> bool {
 	dirty := false
-	bbox := cinfo.bbox
-	px := f32(finfo.pointer.x)
-	py := f32(finfo.pointer.y)
-	in_bbox := rect.contains_point(bbox, {px, py})
 
-	if in_bbox {
+	if cinfo.contains_mouse {
 		cell.state.hovered_cell = cell.cell_index
-	}
-
-	if in_bbox && finfo.pointer.left_button_pressed {
-		if cell.state.selected_cell == cell.cell_index {
-			cell.state.selected_cell = -1
-		} else {
-			cell.state.selected_cell = cell.cell_index
+		if finfo.pointer.left_button_pressed {
+			if cell.state.selected_cell == cell.cell_index {
+				cell.state.selected_cell = -1
+			} else {
+				cell.state.selected_cell = cell.cell_index
+			}
+			dirty = true
 		}
-		dirty = true
 	}
 
 	return dirty
