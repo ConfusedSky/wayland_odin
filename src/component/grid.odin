@@ -1,5 +1,6 @@
 package component
 
+import platform "../platform"
 import renderer "../renderer"
 
 Grid :: struct {
@@ -13,7 +14,9 @@ Grid :: struct {
 
 @(private = "file")
 GRID_VTABLE :: ComponentVTable {
-	update = nil,
+	update = proc(this_ptr: rawptr, cinfo: ComponentInfo, finfo: platform.FrameInfo) -> bool {
+		return update_grid((^Grid)(this_ptr), cinfo, finfo)
+	},
 	render = proc(this_ptr: rawptr, state: ^renderer.VulkanState, cinfo: ComponentInfo) {
 		render_grid((^Grid)(this_ptr), state, cinfo)
 	},
@@ -57,17 +60,49 @@ grid_from_component :: proc(component: ^Component) -> (^Grid, bool) {
 }
 
 @(private = "file")
+grid_cell_layout :: proc(
+	grid: ^Grid,
+	bbox: renderer.Rect,
+) -> (
+	origin_x, origin_y, available_w, available_h, cell_w, cell_h: f32,
+) {
+	n := len(grid.cells)
+	border_offset: f32 = grid.line_width if grid.has_border else 0
+	origin_x = bbox.pos.x + border_offset
+	origin_y = bbox.pos.y + border_offset
+	available_w = bbox.size.x - 2 * border_offset
+	available_h = bbox.size.y - 2 * border_offset
+	cell_w = (available_w - f32(n - 1) * grid.line_width) / f32(n)
+	cell_h = (available_h - f32(n - 1) * grid.line_width) / f32(n)
+	return
+}
+
+@(private = "file")
+update_grid :: proc(grid: ^Grid, cinfo: ComponentInfo, finfo: platform.FrameInfo) -> bool {
+	n := len(grid.cells)
+	origin_x, origin_y, _, _, cell_w, cell_h := grid_cell_layout(grid, cinfo.bbox)
+	dirty := false
+	for row in 0 ..< n {
+		for col in 0 ..< n {
+			if child := &grid.cells[row][col]; child.ctx != nil {
+				cx := origin_x + f32(col) * (cell_w + grid.line_width)
+				cy := origin_y + f32(row) * (cell_h + grid.line_width)
+				child_cinfo := ComponentInfo {
+					bbox = renderer.Rect{pos = {cx, cy}, size = {cell_w, cell_h}},
+				}
+				if update(child, child_cinfo, finfo) do dirty = true
+			}
+		}
+	}
+	return dirty
+}
+
+@(private = "file")
 render_grid :: proc(grid: ^Grid, state: ^renderer.VulkanState, cinfo: ComponentInfo) {
 	n := len(grid.cells)
 	bbox := cinfo.bbox
 
-	border_offset: f32 = grid.line_width if grid.has_border else 0
-	origin_x := bbox.pos.x + border_offset
-	origin_y := bbox.pos.y + border_offset
-	available_w := bbox.size.x - 2 * border_offset
-	available_h := bbox.size.y - 2 * border_offset
-	cell_w := (available_w - f32(n - 1) * grid.line_width) / f32(n)
-	cell_h := (available_h - f32(n - 1) * grid.line_width) / f32(n)
+	origin_x, origin_y, available_w, available_h, cell_w, cell_h := grid_cell_layout(grid, bbox)
 
 	renderer.draw_shape(
 		state,

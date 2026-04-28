@@ -23,10 +23,11 @@ Component :: struct {
 	ctx:    rawptr,
 }
 
-update :: proc(component: ^Component, cinfo: ComponentInfo, finfo: platform.FrameInfo) {
+update :: proc(component: ^Component, cinfo: ComponentInfo, finfo: platform.FrameInfo) -> bool {
 	if component.vtable.update != nil {
-		component.vtable.update(component.ctx, cinfo, finfo)
+		return component.vtable.update(component.ctx, cinfo, finfo)
 	}
+	return false
 }
 
 render :: proc(component: ^Component, state: ^renderer.VulkanState, cinfo: ComponentInfo) {

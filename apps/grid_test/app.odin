@@ -25,6 +25,19 @@ log_blacklist: []string : {
 PADDING: f32 : 20
 BG_COLOR: [4]f32 : {0.8, 0.8, 0.8, 1}
 
+@(private = "file")
+grid_cinfo :: proc(width, height: u32) -> component.ComponentInfo {
+	w := f32(width)
+	h := f32(height)
+	square := min(w, h)
+	return component.ComponentInfo {
+		bbox = renderer.Rect {
+			pos = {(w - square) / 2 + PADDING, (h - square) / 2 + PADDING},
+			size = {square - PADDING * 2, square - PADDING * 2},
+		},
+	}
+}
+
 initialize :: proc(
 	state: ^State,
 	logger: ^runtime_log.Logger,
@@ -69,7 +82,7 @@ shutdown :: proc(state: ^State) {
 }
 
 update :: proc(state: ^State, info: platform.FrameInfo) -> bool {
-	return false
+	return component.update(&state.grid_component, grid_cinfo(info.width, info.height), info)
 }
 
 render_frame :: proc(
@@ -87,26 +100,13 @@ render_frame :: proc(
 		fmt.printfln("Drawing next frame")
 	}
 
-	w := f32(width)
-	h := f32(height)
-	square := min(w, h)
-	grid_x := (w - square) / 2 + PADDING
-	grid_y := (h - square) / 2 + PADDING
-	grid_size := square - PADDING * 2
-
 	renderer.start_frame(
 		&state.vulkan,
 		&state.frame_buf,
 		renderer.RenderParams{width = width, height = height, bg_color = BG_COLOR},
 	) or_return
 
-	component.render(
-		&state.grid_component,
-		&state.vulkan,
-		component.ComponentInfo {
-			bbox = renderer.Rect{pos = {grid_x, grid_y}, size = {grid_size, grid_size}},
-		},
-	)
+	component.render(&state.grid_component, &state.vulkan, grid_cinfo(width, height))
 
 	renderer.end_frame(&state.vulkan) or_return
 	return true, nil
