@@ -2,6 +2,7 @@ package demo
 
 import component "src:component"
 import platform "src:platform"
+import rect "src:rect"
 import renderer "src:renderer"
 
 SudokuCell :: struct {
@@ -56,11 +57,7 @@ update_sudoku_cell :: proc(
 	bbox := cinfo.bbox
 	px := f32(finfo.pointer.x)
 	py := f32(finfo.pointer.y)
-	in_bbox :=
-		px >= bbox.pos.x &&
-		px < bbox.pos.x + bbox.size.x &&
-		py >= bbox.pos.y &&
-		py < bbox.pos.y + bbox.size.y
+	in_bbox := rect.contains_point(bbox, {px, py})
 
 	if in_bbox {
 		cell.state.hovered_cell = cell.cell_index

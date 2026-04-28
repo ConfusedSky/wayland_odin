@@ -1,9 +1,6 @@
 package renderer
 
-Rect :: struct {
-	pos:  [2]f32,
-	size: [2]f32,
-}
+import rect "../rect"
 
 Renderable :: union {
 	ShapeData,
@@ -24,7 +21,7 @@ draw :: proc(state: ^VulkanState, renderable: Renderable) {
 	}
 }
 
-get_bounding_box :: proc(state: ^VulkanState, renderable: Renderable) -> Rect {
+get_bounding_box :: proc(state: ^VulkanState, renderable: Renderable) -> rect.Rect {
 	switch value in renderable {
 	case ShapeData:
 		return get_shape_bounding_box(value)

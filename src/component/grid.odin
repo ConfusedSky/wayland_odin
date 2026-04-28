@@ -1,6 +1,7 @@
 package component
 
 import platform "../platform"
+import rect "../rect"
 import renderer "../renderer"
 
 Grid :: struct {
@@ -62,7 +63,7 @@ grid_from_component :: proc(component: ^Component) -> (^Grid, bool) {
 @(private = "file")
 grid_cell_layout :: proc(
 	grid: ^Grid,
-	bbox: renderer.Rect,
+	bbox: rect.Rect,
 ) -> (
 	origin_x, origin_y, available_w, available_h, cell_w, cell_h: f32,
 ) {
@@ -88,7 +89,7 @@ update_grid :: proc(grid: ^Grid, cinfo: ComponentInfo, finfo: platform.FrameInfo
 				cx := origin_x + f32(col) * (cell_w + grid.line_width)
 				cy := origin_y + f32(row) * (cell_h + grid.line_width)
 				child_cinfo := ComponentInfo {
-					bbox = renderer.Rect{pos = {cx, cy}, size = {cell_w, cell_h}},
+					bbox = rect.Rect{pos = {cx, cy}, size = {cell_w, cell_h}},
 				}
 				if update(child, child_cinfo, finfo) do dirty = true
 			}
@@ -156,7 +157,7 @@ render_grid :: proc(grid: ^Grid, state: ^renderer.VulkanState, cinfo: ComponentI
 			if child := &grid.cells[row][col]; child.ctx != nil {
 				cx := origin_x + f32(col) * (cell_w + grid.line_width)
 				cy := origin_y + f32(row) * (cell_h + grid.line_width)
-				cell_bbox := renderer.Rect {
+				cell_bbox := rect.Rect {
 					pos  = {cx, cy},
 					size = {cell_w, cell_h},
 				}

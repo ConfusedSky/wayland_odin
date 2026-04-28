@@ -1,5 +1,6 @@
 package renderer
 
+import rect "../rect"
 import runtime_log "../runtime_log"
 import "core:fmt"
 import "core:math"
@@ -666,7 +667,7 @@ get_text_bounding_box_top_left :: proc(
 	text: string,
 	pos: [2]f32,
 	style: TextStyle,
-) -> Rect {
+) -> rect.Rect {
 	font, _ := acquire_atlas(state, style.size)
 	if font == nil do return {}
 	scale: f32 = 1
@@ -679,7 +680,7 @@ get_text_bounding_box :: proc(
 	text: string,
 	pos: [2]f32,
 	style: TextStyle,
-) -> Rect {
+) -> rect.Rect {
 	font, _ := acquire_atlas(state, style.size)
 	if font == nil do return {}
 	scale: f32 = 1
@@ -689,7 +690,7 @@ get_text_bounding_box :: proc(
 		if ch < GLYPH_FIRST || int(ch) >= GLYPH_FIRST + GLYPH_COUNT do continue
 		total_width += font.glyphs[int(ch) - GLYPH_FIRST].advance * scale
 	}
-	return Rect {
+	return rect.Rect {
 		pos = {pos.x, pos.y - font.ascent * scale},
 		size = {total_width, (font.ascent - font.descent) * scale},
 	}

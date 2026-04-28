@@ -1,6 +1,7 @@
 package demo
 
 import "src:platform"
+import rect "src:rect"
 import "src:renderer"
 import "src:runtime_log"
 
@@ -11,7 +12,7 @@ SceneObject :: struct {
 	layout_proc: LayoutProc,
 	renderable:  renderer.Renderable,
 	movable:     bool,
-	bounds:      renderer.Rect,
+	bounds:      rect.Rect,
 }
 
 DragState :: struct {

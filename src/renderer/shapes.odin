@@ -1,5 +1,6 @@
 package renderer
 
+import rect "../rect"
 import runtime_log "../runtime_log"
 import "core:fmt"
 import "core:math"
@@ -138,7 +139,7 @@ draw_shape :: proc(state: ^VulkanState, shape: ShapeData) {
 	append(&state.shape_renderer.shape_data, shape)
 }
 
-get_shape_bounding_box :: proc(shape: ShapeData) -> Rect {
+get_shape_bounding_box :: proc(shape: ShapeData) -> rect.Rect {
 	return get_shape_bounding_quad(shape)
 }
 
@@ -270,7 +271,7 @@ expand_shape :: proc(sh: ShapeData, vertices: ^[dynamic]ShapeVertex) {
 }
 
 @(private)
-get_shape_bounding_quad :: proc(shape: ShapeData) -> Rect {
+get_shape_bounding_quad :: proc(shape: ShapeData) -> rect.Rect {
 	angle := shape.transform.angle
 	min_x, min_y, max_x, max_y: f32
 
@@ -361,7 +362,7 @@ get_shape_bounding_quad :: proc(shape: ShapeData) -> Rect {
 		max_y = data.center.y + r
 	}
 
-	return Rect{pos = {min_x, min_y}, size = {max_x - min_x, max_y - min_y}}
+	return rect.Rect{pos = {min_x, min_y}, size = {max_x - min_x, max_y - min_y}}
 }
 
 @(private)

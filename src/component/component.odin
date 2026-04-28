@@ -1,10 +1,11 @@
 package component
 
 import platform "../platform"
+import rect "../rect"
 import renderer "../renderer"
 
 ComponentInfo :: struct {
-	bbox: renderer.Rect,
+	bbox: rect.Rect,
 }
 
 UpdateProc :: proc(this_ptr: rawptr, cinfo: ComponentInfo, finfo: platform.FrameInfo) -> bool

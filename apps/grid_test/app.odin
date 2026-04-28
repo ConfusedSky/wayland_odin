@@ -5,6 +5,7 @@ import "core:sys/linux"
 
 import component "src:component"
 import "src:platform"
+import rect "src:rect"
 import "src:renderer"
 import "src:runtime_log"
 
@@ -31,7 +32,7 @@ grid_cinfo :: proc(width, height: u32) -> component.ComponentInfo {
 	h := f32(height)
 	square := min(w, h)
 	return component.ComponentInfo {
-		bbox = renderer.Rect {
+		bbox = rect.Rect {
 			pos = {(w - square) / 2 + PADDING, (h - square) / 2 + PADDING},
 			size = {square - PADDING * 2, square - PADDING * 2},
 		},

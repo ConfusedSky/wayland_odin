@@ -6,6 +6,7 @@ import "core:sys/linux"
 
 import "src:constants"
 import "src:platform"
+import rect "src:rect"
 import "src:renderer"
 import "src:runtime_log"
 
@@ -350,21 +351,12 @@ hit_test :: proc(state: ^State, point: [2]f32) -> (int, bool) {
 	for i := len(state.objects) - 1; i >= 0; i -= 1 {
 		object := state.objects[i]
 		if !object.movable do continue
-		if point_in_rect(point, object.bounds) &&
+		if rect.contains_point(object.bounds, point) &&
 		   renderer.point_in_renderable(point, object.renderable) {
 			return i, true
 		}
 	}
 	return 0, false
-}
-
-point_in_rect :: proc(point: [2]f32, rect: renderer.Rect) -> bool {
-	return(
-		point.x >= rect.pos.x &&
-		point.y >= rect.pos.y &&
-		point.x <= rect.pos.x + rect.size.x &&
-		point.y <= rect.pos.y + rect.size.y \
-	)
 }
 
 find_object_index_by_id :: proc(state: ^State, id: int) -> (int, bool) {
