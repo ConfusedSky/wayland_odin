@@ -17,11 +17,24 @@ make_grid_vtable :: proc($N: int) -> ComponentVTable {
 		render = proc(this_ptr: rawptr, state: ^renderer.VulkanState, cinfo: ComponentInfo) {
 			_render_grid((^Grid(N))(this_ptr), state, cinfo)
 		},
+		destroy = proc(this_ptr: rawptr) {
+			grid := (^Grid(N))(this_ptr)
+			for row in 0 ..< N {
+				for col in 0 ..< N {
+					if child := &grid.cells[row][col]; child.ctx != nil {
+						destroy(child)
+					}
+				}
+			}
+		},
 	}
 }
 
+// Ownership is passed to the component therefore it is responsible for
+// destroying the grid
 grid_into_component :: proc(grid: ^Grid($N), component: ^Component) {
 	component.vtable = make_grid_vtable(N)
+	component.type = typeid_of(Grid(N))
 	component.ctx = grid
 }
 

@@ -38,21 +38,23 @@ initialize :: proc(
 	if err != nil do return err
 	state.frame_buf = frame_buf
 
-	state.grid = component.Grid(3) {
+	grid := new(component.Grid(3))
+	grid^ = {
 		has_border       = true,
 		line_width       = 4,
 		line_color       = {0, 0, 0, 1},
 		background_color = {1, 1, 1, 1},
 	}
-	component.grid_into_component(&state.grid, &state.grid_component)
+	component.grid_into_component(grid, &state.grid_component)
 
 	for y in 0 ..= 2 {
 		for x in 0 ..= 2 {
-			state.sub_grids[y][x] = component.Grid(3) {
+			subgrid := new(component.Grid(3))
+			subgrid^ = component.Grid(3) {
 				line_width = 2,
 				line_color = {0, 0, 0, 1},
 			}
-			component.grid_into_component(&state.sub_grids[y][x], &state.grid.cells[y][x])
+			component.grid_into_component(subgrid, &grid.cells[y][x])
 		}
 	}
 
@@ -64,6 +66,7 @@ shutdown :: proc(state: ^State) {
 	if state.frame_buf.memory != 0 {
 		renderer.free_frame_buffer(&state.vulkan, &state.frame_buf)
 	}
+	component.destroy(&state.grid_component)
 	state.logger = nil
 	renderer.cleanup_vulkan(&state.vulkan)
 	state.initialized = false
