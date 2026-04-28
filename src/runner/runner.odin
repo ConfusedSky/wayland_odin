@@ -41,27 +41,29 @@ AppConfig :: struct {
 	on_shutdown:   OnShutdown,
 }
 
-_running: bool
-_platform_ctx: ^platform.Context
+@(private = "file")
+running: bool
+@(private = "file")
+platform_ctx: ^platform.Context
 
 // request_frame schedules a render on the next compositor callback.
 // For use outside of on_update (e.g. timers). Prefer returning true from
 // on_update for normal input-driven redraws.
 request_frame :: proc() {
-	if _platform_ctx != nil {
-		platform.request_frame(_platform_ctx)
+	if platform_ctx != nil {
+		platform.request_frame(platform_ctx)
 	}
 }
 
 _handle_signal :: proc "c" (sig: posix.Signal) {
 	#partial switch sig {
 	case .SIGTERM, .SIGINT:
-		_running = false
+		running = false
 	}
 }
 
 run :: proc(config: AppConfig) -> linux.Errno {
-	_running = true
+	running = true
 	sa := posix.sigaction_t {
 		sa_handler = _handle_signal,
 	}
@@ -73,8 +75,8 @@ run :: proc(config: AppConfig) -> linux.Errno {
 	defer runtime_log.cleanup(&logger)
 
 	ctx: platform.Context
-	_platform_ctx = &ctx
-	defer _platform_ctx = nil
+	platform_ctx = &ctx
+	defer platform_ctx = nil
 	platform.init(
 		&ctx,
 		platform.InitParams {
@@ -91,7 +93,7 @@ run :: proc(config: AppConfig) -> linux.Errno {
 		config.on_shutdown(config.user_data)
 	}
 
-	for _running && !platform.should_close(&ctx) {
+	for running && !platform.should_close(&ctx) {
 		platform.pump(&ctx) or_return
 
 		if !initialized {
