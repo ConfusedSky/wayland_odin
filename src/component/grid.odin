@@ -11,17 +11,8 @@ Grid :: struct {
 	background_color: [4]f32,
 }
 
-make_grid :: proc(n: int) -> ^Grid {
-	grid := new(Grid)
-	grid.cells = make([][]Component, n)
-	for i in 0 ..< n {
-		grid.cells[i] = make([]Component, n)
-	}
-	return grid
-}
-
 @(private = "file")
-grid_vtable :: ComponentVTable {
+GRID_VTABLE :: ComponentVTable {
 	update = nil,
 	render = proc(this_ptr: rawptr, state: ^renderer.VulkanState, cinfo: ComponentInfo) {
 		render_grid((^Grid)(this_ptr), state, cinfo)
@@ -42,9 +33,18 @@ grid_vtable :: ComponentVTable {
 	},
 }
 
+make_grid :: proc(n: int) -> ^Grid {
+	grid := new(Grid)
+	grid.cells = make([][]Component, n)
+	for i in 0 ..< n {
+		grid.cells[i] = make([]Component, n)
+	}
+	return grid
+}
+
 // Ownership is passed to the component; it is responsible for destroying the grid.
 grid_into_component :: proc(grid: ^Grid, component: ^Component) {
-	component.vtable = grid_vtable
+	component.vtable = GRID_VTABLE
 	component.type = Grid
 	component.ctx = grid
 }

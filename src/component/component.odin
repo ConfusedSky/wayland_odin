@@ -24,15 +24,21 @@ Component :: struct {
 }
 
 update :: proc(component: ^Component, cinfo: ComponentInfo, finfo: platform.FrameInfo) {
-	component.vtable.update(component.ctx, cinfo, finfo)
+	if component.vtable.update != nil {
+		component.vtable.update(component.ctx, cinfo, finfo)
+	}
 }
 
 render :: proc(component: ^Component, state: ^renderer.VulkanState, cinfo: ComponentInfo) {
-	component.vtable.render(component.ctx, state, cinfo)
+	if component.vtable.render != nil {
+		component.vtable.render(component.ctx, state, cinfo)
+	}
 }
 
 destroy :: proc(component: ^Component) {
-	component.vtable.destroy(component.ctx)
+	if component.vtable.destroy != nil {
+		component.vtable.destroy(component.ctx)
+	}
 	free(component.ctx)
 	component.ctx = nil
 	component.vtable = {}
