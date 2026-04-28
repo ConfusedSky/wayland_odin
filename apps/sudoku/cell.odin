@@ -42,6 +42,8 @@ sudoku_cell_into_component :: proc(cell: ^SudokuCell, comp: ^component.Component
 CELL_INSET_FRACTION :: f32(0.10)
 CELL_HOVER_COLOR :: [4]f32{0, 0, 0, 0.15}
 CELL_SELECTED_COLOR :: [4]f32{0, 0, 0, 0.3}
+CELL_GROUP_CONFLICT_COLOR :: [4]f32{1, 0, 0, 0.15}
+CELL_CONFLICT_COLOR :: [4]f32{1, 0, 0, 0.5}
 CELL_DIGIT_SIZE_FRACTION :: f32(0.65)
 
 @(private = "file")
@@ -84,6 +86,29 @@ render_sudoku_cell :: proc(
 ) {
 	bbox := cinfo.bbox
 	cell_size := bbox.size.x
+	row := cell.cell_index / 9
+	col := cell.cell_index % 9
+	box := (row / 3) * 3 + (col / 3)
+
+	if cell.state.conflicted_cells[cell.cell_index] {
+		renderer.draw_shape(
+			state,
+			renderer.ShapeData {
+				data = renderer.RectData{pos = bbox.pos, size = bbox.size},
+				style = renderer.ShapeStyle{fill_color = CELL_CONFLICT_COLOR},
+			},
+		)
+	} else if cell.state.conflicted_rows[row] ||
+	   cell.state.conflicted_cols[col] ||
+	   cell.state.conflicted_boxes[box] {
+		renderer.draw_shape(
+			state,
+			renderer.ShapeData {
+				data = renderer.RectData{pos = bbox.pos, size = bbox.size},
+				style = renderer.ShapeStyle{fill_color = CELL_GROUP_CONFLICT_COLOR},
+			},
+		)
+	}
 
 	color: [4]f32
 	if cell.state.selected_cell == cell.cell_index {

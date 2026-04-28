@@ -25,6 +25,7 @@ log_blacklist: []string : {
 BLACK :: [4]f32{0, 0, 0, 1}
 WHITE :: [4]f32{1, 1, 1, 1}
 GRAY :: [4]f32{0.8, 0.8, 0.8, 1}
+RED :: [4]f32{1, 0, 0, 1}
 
 BG_COLOR :: GRAY
 PADDING :: f32(20)
@@ -39,6 +40,59 @@ grid_cinfo :: proc(width, height: u32) -> component.ComponentInfo {
 			pos = {(w - square) / 2 + PADDING, (h - square) / 2 + PADDING},
 			size = {square - PADDING * 2, square - PADDING * 2},
 		},
+	}
+}
+
+@(private = "file")
+compute_conflicts :: proc(state: ^State) {
+	state.conflicted_cells = {}
+	state.conflicted_rows = {}
+	state.conflicted_cols = {}
+	state.conflicted_boxes = {}
+
+	for r in 0 ..< 9 {
+		counts := [10]int{}
+		for c in 0 ..< 9 {
+			if v := state.board[r * 9 + c]; v != 0 {counts[v] += 1}
+		}
+		for c in 0 ..< 9 {
+			if v := state.board[r * 9 + c]; v != 0 && counts[v] > 1 {
+				state.conflicted_cells[r * 9 + c] = true
+				state.conflicted_rows[r] = true
+			}
+		}
+	}
+
+	for c in 0 ..< 9 {
+		counts := [10]int{}
+		for r in 0 ..< 9 {
+			if v := state.board[r * 9 + c]; v != 0 {counts[v] += 1}
+		}
+		for r in 0 ..< 9 {
+			if v := state.board[r * 9 + c]; v != 0 && counts[v] > 1 {
+				state.conflicted_cells[r * 9 + c] = true
+				state.conflicted_cols[c] = true
+			}
+		}
+	}
+
+	for box in 0 ..< 9 {
+		br, bc := box / 3, box % 3
+		counts := [10]int{}
+		for r in 0 ..< 3 {
+			for c in 0 ..< 3 {
+				if v := state.board[(br * 3 + r) * 9 + (bc * 3 + c)]; v != 0 {counts[v] += 1}
+			}
+		}
+		for r in 0 ..< 3 {
+			for c in 0 ..< 3 {
+				idx := (br * 3 + r) * 9 + (bc * 3 + c)
+				if v := state.board[idx]; v != 0 && counts[v] > 1 {
+					state.conflicted_cells[idx] = true
+					state.conflicted_boxes[box] = true
+				}
+			}
+		}
 	}
 }
 
@@ -59,6 +113,7 @@ initialize :: proc(
 
 	state.selected_cell = -1
 	state.hovered_cell = -1
+	compute_conflicts(state)
 
 	outer_grid := component.make_grid(3)
 	outer_grid.has_border = true
@@ -137,6 +192,8 @@ update :: proc(state: ^State, info: platform.FrameInfo) -> bool {
 			dirty = true
 		}
 	}
+
+	compute_conflicts(state)
 
 	prev_hovered := state.hovered_cell
 	state.hovered_cell = -1
