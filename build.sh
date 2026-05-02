@@ -7,6 +7,11 @@ glslc src/renderer/shaders/shapes.frag -o src/renderer/shaders/shapes.frag.spv
 glslc src/renderer/shaders/text.vert  -o src/renderer/shaders/text.vert.spv
 glslc src/renderer/shaders/text.frag  -o src/renderer/shaders/text.frag.spv
 
-odin build ./apps/demo -debug -o:none -out:dist/odin -collection:src=./src
-odin build ./apps/sudoku -debug -o:none -out:dist/sudoku -collection:src=./src
-odin build ./apps/grid_test -debug -o:none -out:dist/grid_test -collection:src=./src
+RDOC=""
+if [ "$RENDERDOC" = "1" ]; then
+    RDOC="-define:RENDERDOC=true"
+fi
+
+odin build ./apps/demo     -debug -o:none $RDOC -out:dist/odin      -collection:src=./src
+odin build ./apps/sudoku   -debug -o:none $RDOC -out:dist/sudoku    -collection:src=./src
+odin build ./apps/grid_test -debug -o:none $RDOC -out:dist/grid_test -collection:src=./src

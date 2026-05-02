@@ -33,6 +33,7 @@ VulkanState :: struct {
 	in_frame:        bool,
 	frame_params:    RenderParams,
 	current_buf:     ^VulkanFrameBuffer,
+	renderdoc:       rawptr,
 }
 
 RenderParams :: struct {
@@ -283,6 +284,10 @@ initialize_vulkan :: proc(state: ^VulkanState, logger: ^runtime_log.Logger) -> l
 	initialize_shape_renderer(state) or_return
 	initialize_text_renderer(state) or_return
 
+	when RENDERDOC {
+		load_renderdoc(state)
+	}
+
 	return nil
 }
 
@@ -346,6 +351,9 @@ start_frame :: proc(
 	buf: ^VulkanFrameBuffer,
 	params: RenderParams,
 ) -> linux.Errno {
+	when RENDERDOC {
+		renderdoc_start_capture(state)
+	}
 	state.frame_params = params
 	state.current_buf = buf
 	state.in_frame = true
@@ -546,7 +554,52 @@ end_frame :: proc(state: ^VulkanState) -> linux.Errno {
 		return .EINVAL
 	}
 
+	when RENDERDOC {
+		renderdoc_end_capture(state)
+	}
+
 	return nil
+}
+
+when RENDERDOC {
+	load_renderdoc :: proc(state: ^VulkanState) {
+		lib, ok := dynlib.load_library("librenderdoc.so")
+		if !ok {
+			fmt.eprintln(
+				"renderdoc: librenderdoc.so not found — launch through RenderDoc to capture",
+			)
+			return
+		}
+
+		get_api_addr, found := dynlib.symbol_address(lib, "RENDERDOC_GetAPI")
+		if !found {
+			fmt.eprintln("renderdoc: RENDERDOC_GetAPI symbol not found")
+			dynlib.unload_library(lib)
+			return
+		}
+
+		RENDERDOC_GetAPI :: #type proc "c" (version: i32, out_api: ^rawptr) -> i32
+
+		api: rawptr
+		if (cast(RENDERDOC_GetAPI)get_api_addr)(10400, &api) != 1 {
+			fmt.eprintln("renderdoc: RENDERDOC_GetAPI(1.4.0) failed")
+			dynlib.unload_library(lib)
+			return
+		}
+
+		state.renderdoc = api
+		fmt.printfln("renderdoc: API 1.4.0 loaded")
+	}
+
+	renderdoc_start_capture :: proc(state: ^VulkanState) {
+		if state.renderdoc == nil do return
+		(cast(^RenderDocAPI)state.renderdoc).StartFrameCapture(transmute(rawptr)state.device, nil)
+	}
+
+	renderdoc_end_capture :: proc(state: ^VulkanState) {
+		if state.renderdoc == nil do return
+		(cast(^RenderDocAPI)state.renderdoc).EndFrameCapture(transmute(rawptr)state.device, nil)
+	}
 }
 
 cleanup_vulkan :: proc(state: ^VulkanState) {
